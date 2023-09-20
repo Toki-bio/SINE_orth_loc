@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Finding orthologius loci with SINE ("SINEname") insertions between two genomes ("sp1" and "sp2")
-# Arguments: $1 - genome1, $2-genome2, $3 - SINE consensus. Genomes (preferably) must be named with 3 symbols + .bnk extension, like "mmu.bnk", "hsa.bnk"'
+# Finding orthologius loci with SINE ("SINEname") insertions between two genome assemblies ("sp1" and "sp2")
+# Arguments: $1 - genome1, $2-genome2, $3 - SINE consensus. Genomes (preferably) should be named with 3 symbols + .bnk extension, like "mmu.bnk", "hsa.bnk"'
 # bed file with SINE coordinates must be named "sp1"-"SINEname".bed "sp2"-"SINEname".bed
 # SINE consensus file name must exactly match it's FASTA name
 
@@ -142,8 +142,6 @@ awk '{sub(/-/,"\t",$4); sub(/:/,"\t",$4); {gsub(/\)/,"")}; {gsub(/\(/,"\t0\t0\t"
 cat "$sp1"_from_clu_"$sp2".bed clu_"$sp1".bed | sort -k1,1 -k2,2n > "$sp1"_comb_clu.bed
 cat "$sp2"_from_clu_"$sp1".bed clu_"$sp2".bed | sort -k1,1 -k2,2n > "$sp2"_comb_clu.bed
 cat "$sp1"_comb_clu.bed "$sp2"_comb_clu.bed > $sp1$sp2
-
-#!!!!!!!!!!!check multiple descriptors!!
 
 bedtools merge -i "$sp1"_comb_clu.bed -c 4,5,6,7,8 -o collapse,collapse,collapse,collapse,collapse > "$sp1"_comb_clu_mer.bed
 bedtools merge -i "$sp2"_comb_clu.bed -c 4,5,6,7,8 -o collapse,collapse,collapse,collapse,collapse > "$sp2"_comb_clu_mer.bed
