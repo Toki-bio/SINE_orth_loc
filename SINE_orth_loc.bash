@@ -14,7 +14,7 @@ if [[ $# -eq 0 ]]; then
 fi
 
 Files=($(which "mafft") $(which "esl-alipid") $(which "seqkit") $(which "bedtools") $(which "samtools") $(which "sam2bed") $(which "bwa mem"))
-
+which ComPair.sh
 for f in "${Files[@]}"; do
     if [ ! -f "$f" ]; then
     echo "File $f: not found"
@@ -239,7 +239,7 @@ for i in PART*; do
     done
     find -type f -name "*.cl" -print0 |
      xargs -0 -t -I % -P $(nproc) sh -c "mafft --op 5 --quiet '%' |
-     seqkit seq -w 0 > '%.dbl'; script10 '%.dbl'; rm '%' '%.dbl'"
+     seqkit seq -w 0 > '%.dbl'; ComPair.sh '%.dbl'; rm '%' '%.dbl'"
     rm $i
 done
 
@@ -280,7 +280,7 @@ find -type f -print -name "*.mul" -print0 -exec sh -c "esl-alipid {} |
  awk  -v SINEname=$SINEname 'NR==1 {  print \$1,\$2,SINEname,"\n" }' | sed 's/\s\+/\n/g' >  '{}.list'
  seqkit grep -f '{}.list' '{}' > '{}.doub'; rm '{}.list'" \;
 
-find -type f -name "*.doub" -print0 | xargs -0 -t -I % -P $(nproc) sh -c "mafft --op 5 --quiet '%' | seqkit seq -w 0 > '%.doubles'; script10 '%.doubles'; rm '%' stat"
+find -type f -name "*.doub" -print0 | xargs -0 -t -I % -P $(nproc) sh -c "mafft --op 5 --quiet '%' | seqkit seq -w 0 > '%.doubles'; ComPair.sh '%.doubles'; rm '%' stat"
 
 for i in *.mul.*bad*F *.mul.*shortRF *.mul.*.lfSINE *.mul.*.rfSINE; do rm $i "${i//.doub.doubles*/}" ; done
 
@@ -310,7 +310,7 @@ for k in *.selected; do Count=$(grep -c ">" $k); if [[ $Count -ne "3" ]]; then r
 
 find -type f -name "*.selected" -print0 |
  xargs -0 -t -I % -P $(nproc) sh -c "mafft --op 5 --quiet '%' |
- seqkit seq -w 0 > '%.sel.aligned'; script10 '%.sel.aligned'; rm '%'"
+ seqkit seq -w 0 > '%.sel.aligned'; ComPair.sh '%.sel.aligned'; rm '%'"
 
 for i in *.mul.*.MP *.mul.*.PM *.mul.*.SINE; do Len=$(awk '{if (NR==2) print length}' $i);
  if [[ $Len -ge 1600 ]]
