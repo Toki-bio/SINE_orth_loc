@@ -3,8 +3,6 @@
 # Each aligment of SINE-containing(?) loci is tested if it has 
 # 1) SINE in one genome and gap in otherm or SINE in both genomes 
 # 2) good left and right flanks.
-# Make .bnka files with alignment of 3 sequence: del, ins, and SINE consensus, then run:
-# time(for i in *.bnka; do script10 $i; done)
 
 # searching for consecutive gaps at both sides of SINE consensus in alignment
 # find coordinates of SINE consensus relative to multiple alignment
