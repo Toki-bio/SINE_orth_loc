@@ -1,0 +1,1274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SINE Loci Browser</title>
+<style>
+  :root {
+    --bg: #f5f5f7;
+    --surface: #ffffff;
+    --surface2: #f0f0f3;
+    --border: #d8d8e0;
+    --accent: #2c6fcd;
+    --accent2: #2a8a60;
+    --accent3: #b86a1a;
+    --text: #1a1a2e;
+    --text-dim: #6b6b80;
+    --text-bright: #000010;
+    --sine-color: #2a8a60;
+    --pm-color: #b86a1a;
+    --mp-color: #8a7a10;
+    --font-mono: 'Courier New', monospace;
+    --font-ui: 'Segoe UI', system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-ui);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── TOP BAR ── */
+  #topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    background: var(--surface);
+    border-bottom: 2px solid var(--border);
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+
+  #topbar h1 {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+
+  .sep { width: 1px; height: 20px; background: var(--border); flex-shrink: 0; }
+
+  .tb-btn {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 3px 10px;
+    font-size: 11px;
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .tb-btn:hover { background: #e4e8f4; border-color: var(--accent); color: var(--text-bright); }
+  .tb-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  #folderLabel {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 4px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  #folderLabel:hover { background: #4a7bc8; }
+
+  #fileInfo {
+    font-size: 11px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 340px;
+  }
+
+  #filterRow {
+    display: flex;
+    gap: 5px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  #filterInput {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 3px 8px;
+    font-size: 11px;
+    border-radius: 3px;
+    width: 160px;
+    font-family: var(--font-mono);
+  }
+
+  .filter-chip {
+    padding: 2px 8px;
+    font-size: 10px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    cursor: pointer;
+    background: var(--surface2);
+    color: var(--text-dim);
+    transition: all 0.15s;
+  }
+  .filter-chip:hover { color: var(--text-bright); }
+  .filter-chip.on-sine  { border-color: var(--sine-color); color: var(--sine-color); background: #7ec8a420; }
+  .filter-chip.on-pm    { border-color: var(--pm-color);   color: var(--pm-color);   background: #d98b5b20; }
+  .filter-chip.on-mp    { border-color: var(--mp-color);   color: var(--mp-color);   background: #d9c45b20; }
+
+  #navRow {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  #counter {
+    font-size: 11px;
+    color: var(--text-dim);
+    min-width: 80px;
+    text-align: center;
+    white-space: nowrap;
+  }
+
+  #navPrev, #navNext {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    width: 28px; height: 24px;
+    font-size: 14px;
+    border-radius: 3px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #navPrev:hover, #navNext:hover { background: #e4e8f4; border-color: var(--accent); }
+  #navPrev:disabled, #navNext:disabled { opacity: 0.3; cursor: default; }
+
+  /* ── MAIN AREA ── */
+  #main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* ── SIDEBAR FILE LIST — overlay drawer ── */
+  #sidebar {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 220px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    box-shadow: 2px 0 12px rgba(0,0,0,0.12);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    flex-shrink: 0;
+    z-index: 50;
+    transition: transform 0.18s ease;
+  }
+  #sidebar.collapsed {
+    transform: translateX(-100%);
+  }
+  /* toggle button pinned to sidebar edge */
+  #sidebarToggle {
+    position: absolute;
+    left: 220px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 18px; height: 40px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: none;
+    border-radius: 0 4px 4px 0;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; color: var(--text-dim);
+    box-shadow: 2px 0 6px rgba(0,0,0,0.08);
+    z-index: 51;
+    transition: left 0.18s ease;
+    user-select: none;
+  }
+  #sidebar.collapsed + #sidebarToggle,
+  #sidebarToggle.collapsed {
+    left: 0;
+  }
+
+  #sidebar-header {
+    padding: 6px 10px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    flex-shrink: 0;
+  }
+
+  #fileList {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  #fileList::-webkit-scrollbar { width: 5px; }
+  #fileList::-webkit-scrollbar-track { background: var(--surface); }
+  #fileList::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .file-item {
+    height: 26px;
+    padding: 0 10px;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    cursor: pointer;
+    border-bottom: 1px solid transparent;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text-dim);
+    transition: background 0.1s, color 0.1s;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .file-item:hover { background: var(--surface2); color: var(--text); }
+  .file-item.selected { background: #ddeaf8; color: var(--accent); border-left: 2px solid var(--accent); padding-left: 8px; }
+
+  .file-badge {
+    font-size: 9px;
+    padding: 1px 4px;
+    border-radius: 2px;
+    flex-shrink: 0;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+  }
+  .badge-SINE { background: #d0efe3; color: var(--sine-color); }
+  .badge-PM   { background: #f5e4cc; color: var(--pm-color); }
+  .badge-MP   { background: #f0ecc0; color: var(--mp-color); }
+
+  /* ── CONTENT PANE ── */
+  #content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--bg);
+  }
+
+  /* ── SINGLE VIEW ── */
+  #singleView {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  #alignTitle {
+    padding: 6px 14px;
+    font-size: 11px;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    font-family: var(--font-mono);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  #alignTitle .badge { font-size: 10px; padding: 1px 6px; border-radius: 3px; font-weight: 700; }
+
+  #statLine {
+    padding: 5px 14px;
+    font-size: 10px;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .stat-pill {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 2px 7px;
+    font-size: 10px;
+  }
+
+  .stat-ok   { border-color: #4a9a6a; color: #1a6a40; background: #e8f5ee; }
+  .stat-warn { border-color: #b08030; color: #7a5010; background: #fdf0d8; }
+  .stat-bad  { border-color: #b05050; color: #7a1010; background: #fde8e8; }
+
+  #alignCanvas {
+    flex: 1;
+    overflow: auto;
+    padding: 14px;
+    font-size: 13px;
+    font-family: var(--font-mono);
+    line-height: 1.0;
+  }
+
+  #alignCanvas::-webkit-scrollbar { width: 8px; height: 8px; }
+  #alignCanvas::-webkit-scrollbar-track { background: var(--bg); }
+  #alignCanvas::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  /* MSA rendering */
+  .msa-block {
+    margin-bottom: 18px;
+  }
+
+  .msa-row {
+    display: flex;
+    align-items: flex-start;
+    margin: 0;
+    padding: 0;
+    font-family: var(--font-mono);
+    font-size: 1em;
+    line-height: 1.0;
+    height: 1em;
+    white-space: nowrap;
+  }
+
+  .msa-name {
+    width: 220px;
+    min-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text-dim);
+    font-size: 1em;
+    padding: 0 10px 0 0;
+    margin: 0;
+    flex-shrink: 0;
+    line-height: 1.0;
+  }
+
+  .msa-name.sp1 { color: var(--accent); }
+  .msa-name.sp2 { color: var(--accent2); }
+  .msa-name.sine { color: var(--text-dim); font-style: italic; }
+
+  .msa-seq { letter-spacing: 0; font-size: 1em; }
+  .msa-seq span {
+    display: inline-block;
+    vertical-align: top;
+    margin: 0;
+    padding: 0;
+    line-height: 1.0;
+    font-size: 1em;
+  }
+
+  /* per-character coloring */
+  .nc { color: #b0b0c0; } /* gap */
+  .nA { color: #c0303a; } .nT { color: #2060b0; }
+  .nG { color: #a07010; } .nC { color: #207040; }
+  .nU { color: #2060b0; }
+  /* shading overlay handled by background-color on span */
+
+  .pos-conserved  { background: rgba(0,0,0,0.12); border-radius: 1px; }
+  .pos-moderate   { background: rgba(0,0,0,0.05); border-radius: 1px; }
+
+  /* SINE region highlight */
+  .sine-region { background: rgba(42,138,96,0.10); border-bottom: 1px solid rgba(42,138,96,0.25); }
+  /* Mismatch within SINE region — no background, just a faint underline */
+  .sine-mismatch { background: transparent; border-bottom: 1px solid rgba(180,60,60,0.35); }
+
+  .ruler-row {
+    display: flex;
+    font-family: var(--font-mono);
+    font-size: 0.7em;
+    color: var(--text-dim);
+    margin: 0 0 2px 0;
+    padding: 0;
+    line-height: 1.0;
+    white-space: nowrap;
+  }
+  .ruler-name { width: 220px; min-width: 220px; flex-shrink: 0; }
+
+  /* ── GRID VIEW ── */
+  #gridView {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-content: flex-start;
+  }
+
+  #gridView::-webkit-scrollbar { width: 8px; }
+  #gridView::-webkit-scrollbar-track { background: var(--bg); }
+  #gridView::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  .grid-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    width: 320px;
+    flex-shrink: 0;
+  }
+
+  .grid-card:hover { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .grid-card.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+
+  .card-header {
+    padding: 5px 8px;
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-dim);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .card-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+  }
+
+  .card-canvas {
+    display: block;
+    width: 100%;
+    height: 60px;
+    image-rendering: pixelated;
+  }
+
+  /* ── EMPTY STATE ── */
+  #emptyState {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-dim);
+    gap: 12px;
+  }
+
+  #emptyState .icon { font-size: 48px; opacity: 0.4; }
+  #emptyState h2 { font-size: 16px; font-weight: 600; color: var(--text); opacity: 0.6; }
+  #emptyState p { font-size: 12px; max-width: 340px; text-align: center; line-height: 1.6; }
+
+  /* view toggle */
+  #viewToggle { display: flex; gap: 3px; }
+
+  /* open in MSA viewer button */
+  #openExtBtn {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--accent2);
+    padding: 3px 10px;
+    font-size: 11px;
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+    text-decoration: none;
+  }
+  #openExtBtn:hover { background: #2a3a30; border-color: var(--accent2); }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <h1>SINE Loci Browser</h1>
+  <div class="sep"></div>
+  <label id="folderLabel">📂 Open Folder
+    <input type="file" id="folderInput" webkitdirectory multiple accept="" style="display:none">
+  </label>
+  <span id="loadProgress" style="font-size:11px;color:var(--accent);display:none;">Loading…</span>
+  <div class="sep"></div>
+  <div id="filterRow">
+    <input id="filterInput" type="text" placeholder="filter by name…">
+    <span class="filter-chip" data-type="SINE" title="Show .SINE files">SINE</span>
+    <span class="filter-chip" data-type="PM"   title="Show .PM files">PM</span>
+    <span class="filter-chip" data-type="MP"   title="Show .MP files">MP</span>
+  </div>
+  <div class="sep"></div>
+  <div id="viewToggle">
+    <button class="tb-btn active" id="btnSingle" title="Single alignment view">Single</button>
+    <button class="tb-btn" id="btnGrid" title="Grid preview (multiple alignments)">Grid</button>
+  </div>
+  <div class="sep"></div>
+  <div id="blockSizeRow" style="display:flex;align-items:center;gap:5px;">
+    <span style="font-size:11px;color:var(--text-dim);white-space:nowrap;">Block:</span>
+    <input type="range" id="blockSizeSlider" min="40" max="300" value="80"
+           style="width:90px;cursor:pointer;" title="Characters per block">
+    <input type="number" id="blockSizeInput" min="40" max="300" value="80"
+           style="width:42px;font-size:11px;padding:2px 4px;border:1px solid var(--border);border-radius:3px;background:var(--surface2);"
+           title="Characters per block">
+    <button class="tb-btn" id="blockSizeScreenBtn" title="Fit block to screen width">Screen</button>
+  </div>
+  <div class="sep"></div>
+  <div style="display:flex;align-items:center;gap:4px;">
+    <span style="font-size:11px;color:var(--text-dim);">Zoom:</span>
+    <button class="tb-btn" id="zoomOut" style="width:22px;padding:0;text-align:center;" title="Zoom out (Ctrl+-)">−</button>
+    <span id="zoomVal" style="font-size:11px;min-width:34px;text-align:center;color:var(--text-dim);">100%</span>
+    <button class="tb-btn" id="zoomIn"  style="width:22px;padding:0;text-align:center;" title="Zoom in (Ctrl++)">+</button>
+  </div>
+  <div class="sep"></div>
+  <div id="navRow">
+    <button id="navPrev" disabled title="Previous (←)">‹</button>
+    <span id="counter">0 / 0</span>
+    <button id="navNext" disabled title="Next (→)">›</button>
+  </div>
+  <span id="fileInfo">No folder loaded</span>
+</div>
+
+<div id="main">
+  <!-- sidebar overlay -->
+  <div id="sidebar">
+    <div id="sidebar-header">Files <span id="sidebarCount"></span></div>
+    <div id="fileList"></div>
+  </div>
+  <div id="sidebarToggle" title="Toggle file list">‹</div>
+
+  <!-- content -->
+  <div id="content">
+
+    <!-- empty state -->
+    <div id="emptyState">
+      <div class="icon">🧬</div>
+      <h2>No alignment loaded</h2>
+      <p>Open a folder containing <code>.PM</code>, <code>.MP</code>, or <code>.SINE</code> alignment files produced by SINE_orth_loc.</p>
+    </div>
+
+    <!-- single view -->
+    <div id="singleView" style="display:none; flex:1; flex-direction:column; overflow:hidden;">
+      <div id="alignTitle">
+        <span id="titleName">—</span>
+        <span id="titleBadge" class="badge">—</span>
+        <span style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+          <a id="openExtBtn" href="#" target="_blank" title="Open this file in your MSA Viewer (needs local server or file:// access)">↗ Open in MSA Viewer</a>
+        </span>
+      </div>
+      <div id="statLine"></div>
+      <div id="alignCanvas"></div>
+    </div>
+
+    <!-- grid view -->
+    <div id="gridView" style="display:none;"></div>
+
+  </div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let allFiles = [];   // {name, type, file} — text NOT pre-loaded
+let filtered = [];   // filtered subset
+let currentIdx = 0;
+let viewMode = 'single';
+let activeFilters = new Set();
+let textFilter = '';
+let _textCache = new Map(); // name → text, loaded on demand
+
+async function getFileText(f) {
+  if (_textCache.has(f.name)) return _textCache.get(f.name);
+  const text = await f.file.text();
+  _textCache.set(f.name, text);
+  return text;
+}
+
+const BLOCK_SIZE = 80;
+function getBlockSize() { return parseInt(document.getElementById('blockSizeSlider').value) || 80; }
+
+// ── Zoom ─────────────────────────────────────────────────────────────────────
+let zoomLevel = 100; // percent
+function setZoom(z) {
+  zoomLevel = Math.max(50, Math.min(300, z));
+  document.getElementById('zoomVal').textContent = zoomLevel + '%';
+  const canvas = document.getElementById('alignCanvas');
+  const px = (13 * zoomLevel / 100).toFixed(2);
+  canvas.style.fontSize = px + 'px';
+  // also scale name width via CSS variable
+  canvas.style.setProperty('--name-zoom', zoomLevel / 100);
+}
+document.getElementById('zoomIn').addEventListener('click',  () => { setZoom(zoomLevel + 10); });
+document.getElementById('zoomOut').addEventListener('click', () => { setZoom(zoomLevel - 10); });
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) { e.preventDefault(); setZoom(zoomLevel + 10); }
+  if ((e.ctrlKey || e.metaKey) &&  e.key === '-')                   { e.preventDefault(); setZoom(zoomLevel - 10); }
+  if ((e.ctrlKey || e.metaKey) &&  e.key === '0')                   { e.preventDefault(); setZoom(100); }
+});
+document.getElementById('alignCanvas').addEventListener('wheel', e => {
+  if (!e.ctrlKey) return;
+  e.preventDefault();
+  setZoom(zoomLevel + (e.deltaY < 0 ? 10 : -10));
+}, { passive: false });
+
+// ── Sidebar toggle ────────────────────────────────────────────────────────────
+(function() {
+  const sidebar = document.getElementById('sidebar');
+  const toggle  = document.getElementById('sidebarToggle');
+  let open = true;
+  toggle.addEventListener('click', () => {
+    open = !open;
+    sidebar.classList.toggle('collapsed', !open);
+    toggle.classList.toggle('collapsed', !open);
+    toggle.textContent = open ? '‹' : '›';
+  });
+})();
+
+// Exact port of generateScale from MSA-viewer/script.js
+function generateScale(maxLength, interval, startPos) {
+  interval = interval || 10;
+  startPos = startPos || 0;
+  const scaleArray = new Array(maxLength).fill(' ');
+  const startAbs = startPos + 1;
+  const endAbs   = startPos + maxLength;
+  const firstMultiple = Math.ceil(startAbs / interval) * interval;
+  for (let absPos = firstMultiple; absPos < endAbs; absPos += interval) {
+    let label;
+    if ((absPos / interval) % 2 === 1) {
+      label = absPos.toString();
+    } else {
+      label = '*';
+    }
+    const relIdx  = absPos - startPos - 1;
+    const startIdx = relIdx - (label.length - 1);
+    if (startIdx >= 0 && startIdx + label.length <= maxLength) {
+      for (let i = 0; i < label.length; i++) {
+        scaleArray[startIdx + i] = label[i];
+      }
+    }
+  }
+  return scaleArray.join('');
+}
+const NT_COLORS = { A:'nA', T:'nT', G:'nG', C:'nC', U:'nU', '-':'nc', '.':'nc' };
+
+// ── File loading ────────────────────────────────────────────────────────────
+document.getElementById('folderInput').addEventListener('change', e => {
+  const files = Array.from(e.target.files);
+  const wanted = files.filter(f => {
+    const ext = f.name.split('.').pop().toUpperCase();
+    return ['PM','MP','SINE'].includes(ext);
+  });
+  wanted.sort((a,b) => a.name.localeCompare(b.name, undefined, {numeric:true}));
+
+  // Only store metadata — no text reading yet
+  _textCache.clear();
+  allFiles = wanted.map(f => ({
+    name: f.name,
+    type: f.name.split('.').pop().toUpperCase(),
+    file: f
+  }));
+
+  const info = document.getElementById('fileInfo');
+  info.textContent = `${allFiles.length} files found`;
+  applyFilter();
+});
+
+// ── Block size controls ──────────────────────────────────────────────────────
+(function() {
+  const slider = document.getElementById('blockSizeSlider');
+  const input  = document.getElementById('blockSizeInput');
+
+  slider.addEventListener('input', () => {
+    input.value = slider.value;
+    if (viewMode === 'single' && filtered.length) renderAlignmentForCurrent();
+  });
+  input.addEventListener('change', () => {
+    const v = Math.max(40, Math.min(300, parseInt(input.value) || 80));
+    input.value = v;
+    slider.value = v;
+    if (viewMode === 'single' && filtered.length) renderAlignmentForCurrent();
+  });
+
+  document.getElementById('blockSizeScreenBtn').addEventListener('click', () => {
+    const container = document.getElementById('alignCanvas');
+    if (!container) return;
+    // measure name column width from a rendered name element
+    let namePx = 220; // CSS default
+    const nameEl = container.querySelector('.msa-name');
+    if (nameEl) namePx = nameEl.getBoundingClientRect().width;
+    // measure char width from a rendered span, or estimate from font-size
+    let charPx = 0;
+    const sampleSpan = container.querySelector('.msa-seq span');
+    if (sampleSpan) charPx = sampleSpan.getBoundingClientRect().width;
+    if (!charPx) charPx = 12; // 12px Courier New at default size
+    const available = container.clientWidth - namePx - 24;
+    const chars = Math.max(40, Math.min(300, Math.floor(available / charPx)));
+    slider.value = chars;
+    input.value  = chars;
+    if (viewMode === 'single' && filtered.length) renderAlignmentForCurrent();
+  });
+})();
+document.querySelectorAll('.filter-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    const t = chip.dataset.type;
+    if (activeFilters.has(t)) {
+      activeFilters.delete(t);
+      chip.className = 'filter-chip';
+    } else {
+      activeFilters.add(t);
+      chip.className = `filter-chip on-${t.toLowerCase()}`;
+    }
+    applyFilter();
+  });
+});
+
+document.getElementById('filterInput').addEventListener('input', e => {
+  textFilter = e.target.value.toLowerCase();
+  applyFilter();
+});
+
+function applyFilter() {
+  filtered = allFiles.filter(f => {
+    if (activeFilters.size && !activeFilters.has(f.type)) return false;
+    if (textFilter && !f.name.toLowerCase().includes(textFilter)) return false;
+    return true;
+  });
+  currentIdx = 0;
+  rebuildSidebar();
+  updateCounter();
+  if (viewMode === 'single') showCurrent();
+  else renderGrid();
+}
+
+// ── Sidebar — virtual scroll ──────────────────────────────────────────────
+const ITEM_H = 26; // px per row (must match CSS)
+let _sidebarScrollTop = 0;
+
+function rebuildSidebar() {
+  document.getElementById('sidebarCount').textContent = `(${filtered.length})`;
+  renderSidebarViewport();
+}
+
+function renderSidebarViewport() {
+  const list = document.getElementById('fileList');
+  const containerH = list.clientHeight || 400;
+  const scrollTop  = list.scrollTop;
+  const total      = filtered.length;
+  const totalH     = total * ITEM_H;
+
+  const firstVisible = Math.max(0, Math.floor(scrollTop / ITEM_H) - 2);
+  const lastVisible  = Math.min(total - 1, Math.ceil((scrollTop + containerH) / ITEM_H) + 2);
+
+  list.innerHTML = '';
+
+  // top spacer
+  if (firstVisible > 0) {
+    const spacer = document.createElement('div');
+    spacer.style.height = (firstVisible * ITEM_H) + 'px';
+    list.appendChild(spacer);
+  }
+
+  for (let i = firstVisible; i <= lastVisible; i++) {
+    const f = filtered[i];
+    const div = document.createElement('div');
+    div.className = 'file-item' + (i === currentIdx ? ' selected' : '');
+    div.style.height = ITEM_H + 'px';
+    const badge = document.createElement('span');
+    badge.className = `file-badge badge-${f.type}`;
+    badge.textContent = f.type;
+    const name = document.createElement('span');
+    name.textContent = f.name.replace(/\.cl\..*$/, '');
+    name.title = f.name;
+    div.appendChild(badge);
+    div.appendChild(name);
+    div.addEventListener('click', () => { currentIdx = i; selectFile(); });
+    list.appendChild(div);
+  }
+
+  // bottom spacer
+  const rendered = lastVisible - firstVisible + 1;
+  const remaining = total - firstVisible - rendered;
+  if (remaining > 0) {
+    const spacer = document.createElement('div');
+    spacer.style.height = (remaining * ITEM_H) + 'px';
+    list.appendChild(spacer);
+  }
+}
+
+// attach scroll listener once
+document.getElementById('fileList').addEventListener('scroll', () => {
+  renderSidebarViewport();
+}, { passive: true });
+
+function updateSidebarHighlight() {
+  // Just re-render the viewport — cheap
+  renderSidebarViewport();
+  // Scroll so selected item is visible
+  const list = document.getElementById('fileList');
+  const itemTop = currentIdx * ITEM_H;
+  const itemBot = itemTop + ITEM_H;
+  if (itemTop < list.scrollTop) list.scrollTop = itemTop;
+  else if (itemBot > list.scrollTop + list.clientHeight) list.scrollTop = itemBot - list.clientHeight;
+}
+
+// ── Navigation ───────────────────────────────────────────────────────────────
+document.getElementById('navPrev').addEventListener('click', () => { if (currentIdx > 0) { currentIdx--; selectFile(); } });
+document.getElementById('navNext').addEventListener('click', () => { if (currentIdx < filtered.length-1) { currentIdx++; selectFile(); } });
+
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')    { if (currentIdx > 0) { currentIdx--; selectFile(); } }
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown')  { if (currentIdx < filtered.length-1) { currentIdx++; selectFile(); } }
+});
+
+function updateCounter() {
+  const c = document.getElementById('counter');
+  c.textContent = filtered.length ? `${currentIdx+1} / ${filtered.length}` : '0 / 0';
+  document.getElementById('navPrev').disabled = currentIdx === 0;
+  document.getElementById('navNext').disabled = currentIdx >= filtered.length-1;
+}
+
+function selectFile() {
+  updateCounter();
+  updateSidebarHighlight();
+  if (viewMode === 'single') showCurrent();
+  else { updateGridSelection(); }
+}
+
+// ── View toggle ──────────────────────────────────────────────────────────────
+document.getElementById('btnSingle').addEventListener('click', () => setView('single'));
+document.getElementById('btnGrid').addEventListener('click', () => setView('grid'));
+
+function setView(mode) {
+  viewMode = mode;
+  document.getElementById('btnSingle').classList.toggle('active', mode === 'single');
+  document.getElementById('btnGrid').classList.toggle('active', mode === 'grid');
+  document.getElementById('singleView').style.display = mode === 'single' ? 'flex' : 'none';
+  document.getElementById('gridView').style.display = mode === 'grid' ? 'flex' : 'none';
+  document.getElementById('emptyState').style.display = 'none';
+  if (mode === 'single') showCurrent();
+  else renderGrid();
+}
+
+// ── FASTA parser ─────────────────────────────────────────────────────────────
+function parseFasta(text) {
+  const seqs = [];
+  let cur = null;
+  for (const line of text.split('\n')) {
+    const l = line.trim();
+    if (!l) continue;
+    if (l.startsWith('>')) {
+      cur = { header: l.slice(1), seq: '' };
+      seqs.push(cur);
+    } else if (cur) {
+      cur.seq += l;
+    }
+  }
+  return seqs;
+}
+
+// Classify sequence role from header
+function seqRole(header) {
+  if (/^sq2m$/i.test(header)) return 'sine';
+  // first genomic seq = sp1, second = sp2, SINE consensus = sine
+  return null; // assigned by index
+}
+
+// Parse ComPair stat line embedded in stat files (not available here, but
+// we can extract LF/RF/OneTwo etc from filename context if available)
+// For now we parse from the alignment structure itself.
+
+// ── Single view renderer ──────────────────────────────────────────────────────
+async function showCurrent() {
+  const sv = document.getElementById('singleView');
+  const empty = document.getElementById('emptyState');
+
+  if (!filtered.length) {
+    sv.style.display = 'none';
+    empty.style.display = 'flex';
+    return;
+  }
+
+  empty.style.display = 'none';
+  sv.style.display = 'flex';
+
+  const f = filtered[currentIdx];
+  const text = await getFileText(f);
+  const seqs = parseFasta(text);
+
+  // title + badge
+  const titleName = document.getElementById('titleName');
+  titleName.textContent = f.name.replace(/\.cl\..*$/, '');
+  const badge = document.getElementById('titleBadge');
+  badge.textContent = f.type;
+  badge.style.background = f.type === 'SINE' ? '#7ec8a430' : f.type === 'PM' ? '#d98b5b30' : '#d9c45b30';
+  badge.style.color = f.type === 'SINE' ? 'var(--sine-color)' : f.type === 'PM' ? 'var(--pm-color)' : 'var(--mp-color)';
+
+  // open in MSA viewer link (blob URL)
+  // can't auto-load into MSA viewer without server; just copy content
+  const ext = document.getElementById('openExtBtn');
+  ext.onclick = (e) => {
+    e.preventDefault();
+    // copy FASTA to clipboard so user can paste into MSA viewer
+    getFileText(f).then(txt => navigator.clipboard.writeText(txt)).then(() => {
+      ext.textContent = '✓ Copied!';
+      setTimeout(() => ext.textContent = '↗ Copy for MSA Viewer', 1500);
+    });
+  };
+  ext.textContent = '↗ Copy for MSA Viewer';
+
+  // stat line
+  renderStatLine(seqs, f);
+
+  // alignment
+  renderAlignment(seqs, f);
+}
+
+function renderStatLine(seqs, f) {
+  const sl = document.getElementById('statLine');
+  if (seqs.length < 2) { sl.innerHTML = ''; return; }
+
+  const len = seqs[0]?.seq.length || 0;
+
+  // compute basic stats
+  const s = computeStats(seqs);
+
+  const pill = (label, val, cls) =>
+    `<span class="stat-pill ${cls}" title="${label}">${label}: <b>${val}</b></span>`;
+
+  const flCls  = s.LFcp > 65 ? 'stat-ok' : s.LFcp > 40 ? 'stat-warn' : 'stat-bad';
+  const frCls  = s.RFcp > 65 ? 'stat-ok' : s.RFcp > 40 ? 'stat-warn' : 'stat-bad';
+  const sinCls = s.OneTwo > 65 ? 'stat-ok' : s.OneTwo > 40 ? 'stat-warn' : 'stat-bad';
+  const sosCls = s.SO > 100 ? 'stat-ok' : s.SO > 80 ? 'stat-warn' : 'stat-bad';
+  const stCls  = s.ST > 100 ? 'stat-ok' : s.ST > 80 ? 'stat-warn' : 'stat-bad';
+
+  sl.innerHTML =
+    `<span style="color:var(--text-dim);font-size:10px;">len=${len}</span>` +
+    pill('LFcp', s.LFcp, flCls) +
+    pill('RFcp', s.RFcp, frCls) +
+    pill('1↔2', s.OneTwo+'%', sinCls) +
+    pill('SO', s.SO, sosCls) +
+    pill('ST', s.ST, stCls) +
+    (s.sineStart >= 0 ? `<span class="stat-pill" style="color:var(--sine-color);border-color:#7ec8a440">SINE@${s.sineStart}–${s.sineEnd}</span>` : '');
+}
+
+function computeStats(seqs) {
+  if (seqs.length < 2) return {};
+  const sp1 = seqs[0].seq;
+  const sp2 = seqs[1].seq;
+  const sine = seqs[2]?.seq || '';
+  const alen = sp1.length;
+
+  // Find SINE region: where sine consensus has bases (not all gaps)
+  let sineStart = -1, sineEnd = -1;
+  for (let i = 0; i < sine.length; i++) {
+    if (sine[i] !== '-' && sine[i] !== '') {
+      if (sineStart < 0) sineStart = i;
+      sineEnd = i;
+    }
+  }
+
+  const LF  = sineStart >= 0 ? sineStart : Math.floor(alen * 0.35);
+  const RF  = sineEnd   >= 0 ? sineEnd   : Math.floor(alen * 0.65);
+
+  const pctId = (a, b, from, to) => {
+    let same = 0, total = 0;
+    for (let i = from; i <= to && i < a.length; i++) {
+      const ca = (a[i]||'-').toUpperCase();
+      const cb = (b[i]||'-').toUpperCase();
+      if (ca === '-' && cb === '-') continue;
+      total++;
+      if (ca === cb) same++;
+    }
+    return total ? Math.round(same * 100 / total) : 0;
+  };
+
+  const numId = (a, b, from, to) => {
+    let same = 0;
+    for (let i = from; i <= to && i < a.length; i++) {
+      if ((a[i]||'-').toUpperCase() === (b[i]||'-').toUpperCase() && a[i] !== '-') same++;
+    }
+    return same;
+  };
+
+  const LFcp   = numId(sp1, sp2, 0, LF-1);
+  const RFcp   = numId(sp1, sp2, RF+1, alen-1);
+  const OneTwo = pctId(sp1, sp2, LF, RF);
+  const SO     = sine.length ? numId(sp1, sine, LF, RF) : 0;
+  const ST     = sine.length ? numId(sp2, sine, LF, RF) : 0;
+
+  return { LFcp, RFcp, OneTwo, SO, ST, sineStart: LF, sineEnd: RF };
+}
+
+// ── MSA renderer ─────────────────────────────────────────────────────────────
+let _lastSeqs = null; // cache for block-size re-render
+let _lastF    = null;
+
+function renderAlignmentForCurrent() {
+  if (_lastSeqs) renderAlignment(_lastSeqs, _lastF);
+}
+
+function renderAlignment(seqs, f) {
+  _lastSeqs = seqs;
+  _lastF    = f;
+
+  const container = document.getElementById('alignCanvas');
+  container.innerHTML = '';
+
+  if (!seqs.length) {
+    container.textContent = 'No sequences parsed.';
+    return;
+  }
+
+  const blockSize = getBlockSize();
+  const alen = seqs[0].seq.length;
+  const stats = computeStats(seqs);
+  const sineStart = stats.sineStart >= 0 ? stats.sineStart : 0;
+  const sineEnd   = stats.sineEnd   >= 0 ? stats.sineEnd   : 0;
+
+  // assign roles
+  const roles = seqs.map((s, i) => {
+    if (/^sq2m$/i.test(s.header)) return 'sine';
+    if (i === 0) return 'sp1';
+    if (i === 1) return 'sp2';
+    return 'other';
+  });
+
+  // shorten names for display
+  const displayNames = seqs.map(s => {
+    const h = s.header;
+    const m = h.match(/^([^:]+:\d+-\d+\([+-]\)?)/) || h.match(/^([^:]+)/);
+    return m ? m[1] : h.slice(0, 40);
+  });
+
+  // conservation per column (sp1 vs sp2 only)
+  const conservation = new Float32Array(alen);
+  for (let col = 0; col < alen; col++) {
+    const bases = seqs.slice(0, 2).map(s => (s.seq[col]||'-').toUpperCase());
+    const nonGap = bases.filter(b => b !== '-');
+    if (!nonGap.length) continue;
+    const freq = {};
+    nonGap.forEach(b => freq[b] = (freq[b]||0) + 1);
+    conservation[col] = Math.max(...Object.values(freq)) / bases.length;
+  }
+
+  // render in blocks
+  for (let blockStart = 0; blockStart < alen; blockStart += blockSize) {
+    const blockEnd = Math.min(blockStart + blockSize, alen);
+    const blockLen = blockEnd - blockStart;
+    const block = document.createElement('div');
+    block.className = 'msa-block';
+
+    // ── ruler: exact generateScale port from MSA-viewer ──
+    const ruler = document.createElement('div');
+    ruler.className = 'ruler-row';
+    const rname = document.createElement('span');
+    rname.className = 'ruler-name';
+    rname.textContent = '';
+    ruler.appendChild(rname);
+    const rseq = document.createElement('span');
+    rseq.textContent = generateScale(blockLen, 10, blockStart);
+    ruler.appendChild(rseq);
+    block.appendChild(ruler);
+
+    // sequence rows
+    seqs.forEach((s, si) => {
+      const row = document.createElement('div');
+      row.className = 'msa-row';
+
+      const nameEl = document.createElement('span');
+      nameEl.className = 'msa-name ' + (roles[si] === 'sp1' ? 'sp1' : roles[si] === 'sp2' ? 'sp2' : 'sine');
+      nameEl.textContent = displayNames[si];
+      nameEl.title = s.header;
+      row.appendChild(nameEl);
+
+      const seqEl = document.createElement('span');
+      seqEl.className = 'msa-seq';
+
+      for (let col = blockStart; col < blockEnd; col++) {
+        const ch = s.seq[col] || '-';
+        const span = document.createElement('span');
+        const cu = ch.toUpperCase();
+        span.className = NT_COLORS[cu] || 'nc';
+        span.textContent = ch;
+
+        // shading (only on genomic seqs)
+        if (roles[si] !== 'sine') {
+          const cons = conservation[col];
+          if (cons >= 0.9) span.classList.add('pos-conserved');
+          else if (cons >= 0.7) span.classList.add('pos-moderate');
+        }
+
+        // SINE region: tint only matching columns on genomic rows; always on SINE consensus
+        if (col >= sineStart && col <= sineEnd) {
+          if (roles[si] === 'sine') {
+            span.classList.add('sine-region');
+          } else {
+            // match = both genomic seqs have the same non-gap base at this column
+            const c1 = (seqs[0].seq[col] || '-').toUpperCase();
+            const c2 = (seqs[1].seq[col] || '-').toUpperCase();
+            if (c1 === c2 && c1 !== '-') {
+              span.classList.add('sine-region');
+            }
+            // mismatches get a subtle mismatch marker instead
+            else if (c1 !== c2) {
+              span.classList.add('sine-mismatch');
+            }
+          }
+        }
+
+        seqEl.appendChild(span);
+      }
+
+      row.appendChild(seqEl);
+      block.appendChild(row);
+    });
+
+    container.appendChild(block);
+  }
+}
+
+// ── Grid view — lazy chunk rendering ────────────────────────────────────────
+let _gridRenderCancel = false;
+
+function renderGrid() {
+  const grid = document.getElementById('gridView');
+  grid.innerHTML = '';
+  _gridRenderCancel = true; // cancel any previous batch
+
+  if (!filtered.length) return;
+
+  _gridRenderCancel = false;
+  const CHUNK = 30;
+  let offset = 0;
+
+  function renderChunk() {
+    if (_gridRenderCancel) return;
+    const end = Math.min(offset + CHUNK, filtered.length);
+    for (let i = offset; i < end; i++) {
+      grid.appendChild(makeCard(i));
+    }
+    offset = end;
+    if (offset < filtered.length) {
+      (window.requestIdleCallback || requestAnimationFrame)(renderChunk);
+    }
+  }
+  renderChunk();
+}
+
+function makeCard(i) {
+  const f = filtered[i];
+  const card = document.createElement('div');
+  card.className = 'grid-card' + (i === currentIdx ? ' selected' : '');
+  card.dataset.idx = i;
+  card.addEventListener('click', () => { currentIdx = i; updateCounter(); updateGridSelection(); });
+  card.addEventListener('dblclick', () => { currentIdx = i; setView('single'); });
+
+  const header = document.createElement('div');
+  header.className = 'card-header';
+  const cname = document.createElement('span');
+  cname.className = 'card-name';
+  cname.textContent = f.name.replace(/\.cl\..*$/, '');
+  cname.title = f.name;
+  header.appendChild(cname);
+  const badge = document.createElement('span');
+  badge.className = `file-badge badge-${f.type}`;
+  badge.textContent = f.type;
+  header.appendChild(badge);
+  card.appendChild(header);
+
+  const canvas = document.createElement('canvas');
+  canvas.className = 'card-canvas';
+  canvas.width = 320;
+  canvas.height = 60;
+  card.appendChild(canvas);
+
+  // lazy minimap: only render when card enters viewport
+  const obs = new IntersectionObserver((entries, o) => {
+    if (entries[0].isIntersecting) {
+      o.disconnect();
+      getFileText(f).then(text => renderMinimap(canvas, { text }));
+    }
+  }, { rootMargin: '100px' });
+  obs.observe(canvas);
+
+  return card;
+}
+
+function updateGridSelection() {
+  document.querySelectorAll('.grid-card').forEach(c => {
+    c.classList.toggle('selected', parseInt(c.dataset.idx) === currentIdx);
+  });
+  const card = document.querySelector(`.grid-card[data-idx="${currentIdx}"]`);
+  if (card) card.scrollIntoView({block:'nearest', behavior:'smooth'});
+  updateSidebarHighlight();
+}
+
+function renderMinimap(canvas, f) {
+  const seqs = parseFasta(f.text || '');
+  if (seqs.length < 2) return;
+
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#f5f5f7';
+  ctx.fillRect(0, 0, W, H);
+
+  const alen = seqs[0].seq.length;
+  if (!alen) return;
+
+  const stats = computeStats(seqs);
+  const sineStart = stats.sineStart >= 0 ? stats.sineStart : 0;
+  const sineEnd   = stats.sineEnd   >= 0 ? stats.sineEnd   : alen;
+
+  // draw SINE region band
+  const sx = (sineStart / alen) * W;
+  const ex = (sineEnd / alen) * W;
+  ctx.fillStyle = 'rgba(42,138,96,0.12)';
+  ctx.fillRect(sx, 0, ex-sx, H);
+  ctx.fillStyle = 'rgba(42,138,96,0.5)';
+  ctx.fillRect(sx, 0, 1, H);
+  ctx.fillRect(ex, 0, 1, H);
+
+  const rows = Math.min(seqs.length, 3);
+  const rowH = H / rows;
+  const NTCOL = { A:'#c0303a', T:'#2060b0', G:'#a07010', C:'#207040', U:'#2060b0', '-':'#d8d8e0' };
+
+  for (let si = 0; si < rows; si++) {
+    const seq = seqs[si].seq;
+    for (let col = 0; col < alen; col++) {
+      const ch = (seq[col]||'-').toUpperCase();
+      ctx.fillStyle = NTCOL[ch] || '#a0a0b0';
+      const x = (col / alen) * W;
+      const w = Math.max(1, W / alen);
+      ctx.fillRect(x, si * rowH + 1, w, rowH - 2);
+    }
+  }
+
+  // label rows
+  ctx.font = '8px Courier New';
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ['sp1','sp2','SINE'].slice(0, rows).forEach((label, i) => {
+    ctx.fillText(label, 3, i * rowH + rowH - 3);
+  });
+}
+
+// ── Initial state ─────────────────────────────────────────────────────────────
+(function init() {
+  const empty = document.getElementById('emptyState');
+  const sv = document.getElementById('singleView');
+  const gv = document.getElementById('gridView');
+  empty.style.display = 'flex';
+  sv.style.display = 'none';
+  gv.style.display = 'none';
+})();
+</script>
+</body>
+</html>
