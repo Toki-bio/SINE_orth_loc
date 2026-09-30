@@ -35,6 +35,8 @@ OPTIONAL ARGUMENTS:
     -n1, --name1 NAME           Short name for genome1 (default: derived from filename)
     -n2, --name2 NAME           Short name for genome2 (default: derived from filename)
     -k,  --keep-intermediates   Keep all intermediate files (default: cleanup)
+    -f,  --force                Reuse an existing output directory without asking
+                                (required for non-interactive/batch jobs)
     -t,  --threads NUM          Number of threads (default: auto-detect)
     -h,  --help                 Show this help message
     -v,  --version              Show version
@@ -82,6 +84,7 @@ OUTPUT_DIR=""
 NAME1=""
 NAME2=""
 KEEP_INTERMEDIATES=false
+FORCE=false
 THREADS=""
 
 # Parse arguments
@@ -121,6 +124,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -k|--keep-intermediates)
             KEEP_INTERMEDIATES=true
+            shift
+            ;;
+        -f|--force)
+            FORCE=true
             shift
             ;;
         -t|--threads)
@@ -177,7 +184,6 @@ warning() {
 
 # Check if original script exists
 [[ ! -f "$ORIGINAL_SCRIPT" ]] && error_exit "Original script not found: $ORIGINAL_SCRIPT"
-[[ ! -x "$ORIGINAL_SCRIPT" ]] && error_exit "Original script not executable: $ORIGINAL_SCRIPT"
 
 # Validate file formats
 validate_fasta() {
@@ -263,8 +269,10 @@ if [[ -z "$OUTPUT_DIR" ]]; then
     OUTPUT_DIR="sine_results_${TIMESTAMP}"
 fi
 
-if [[ -e "$OUTPUT_DIR" ]]; then
+if [[ -e "$OUTPUT_DIR" ]] && [[ "$FORCE" == false ]]; then
     warning "Output directory already exists: $OUTPUT_DIR"
+    # no terminal (e.g. SLURM/PBS job): cannot ask, so refuse instead of silently aborting
+    [[ -t 0 ]] || error_exit "Output directory exists and no terminal to confirm; rerun with --force"
     read -p "Continue and potentially overwrite? (y/N): " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -370,10 +378,9 @@ echo "Organizing results..."
 [[ -f "stat_multi_${NAME1}-${NAME2}" ]] && mv "stat_multi_${NAME1}-${NAME2}" "$RESULTS_DIR/"
 
 # Move alignment files
+# find instead of *.ext globs: with 10^5 alignments a glob exceeds the argument limit
 for ext in PM MP SINE; do
-    if ls *.${ext} &> /dev/null; then
-        mv *.${ext} "$ALIGNMENTS_DIR/" 2>/dev/null || true
-    fi
+    find . -maxdepth 1 -type f -name "*.${ext}" -exec mv -t "$ALIGNMENTS_DIR/" {} +
 done
 
 # Create summary report
@@ -408,9 +415,9 @@ if [[ -f "${RESULTS_DIR}/MP_PM_SINE_${NAME1}-${NAME2}.txt" ]]; then
 fi
 
 # Count alignment files
-PM_COUNT=$(ls "$ALIGNMENTS_DIR"/*.PM 2>/dev/null | wc -l)
-MP_COUNT=$(ls "$ALIGNMENTS_DIR"/*.MP 2>/dev/null | wc -l)
-SINE_COUNT=$(ls "$ALIGNMENTS_DIR"/*.SINE 2>/dev/null | wc -l)
+PM_COUNT=$(find "$ALIGNMENTS_DIR" -maxdepth 1 -type f -name "*.PM" | wc -l)
+MP_COUNT=$(find "$ALIGNMENTS_DIR" -maxdepth 1 -type f -name "*.MP" | wc -l)
+SINE_COUNT=$(find "$ALIGNMENTS_DIR" -maxdepth 1 -type f -name "*.SINE" | wc -l)
 
 cat >> "$SUMMARY_FILE" << EOF
 

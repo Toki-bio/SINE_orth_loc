@@ -13,11 +13,11 @@ if [[ $# -eq 0 ]]; then
     exit 1
 fi
 
-Files=($(which "mafft") $(which "esl-alipid") $(which "seqkit") $(which "bedtools") $(which "samtools") $(which "sam2bed") $(which "bwa mem"))
-which ComPair.sh
-for f in "${Files[@]}"; do
-    if [ ! -f "$f" ]; then
-    echo "File $f: not found"
+THREADS=${THREADS:-$(nproc)} # set THREADS to match the scheduler allocation on clusters
+
+for tool in mafft esl-alipid seqkit bedtools samtools sam2bed bwa ComPair.sh; do
+    if ! command -v "$tool" > /dev/null 2>&1; then
+    echo "$tool: not found"
     exit 1
     fi
 done
@@ -99,14 +99,14 @@ SAMsp2=$(echo "$sp1"_flanks-$sp2.sam)
 
 if [ -f "$SAMsp1" ]; then echo $1 sam file found
     else echo mapping $sp2 flanks on $sp1 genome
-    bwa mem -t=$(nproc) $1 "$sp2"_flanks_300.bnk > "$sp2"_flanks-$sp1.sam
+    bwa mem -t $THREADS $1 "$sp2"_flanks_300.bnk > "$sp2"_flanks-$sp1.sam
     sam2bed < "$sp2"_flanks-$sp1.sam | awk '{if (length($12)>99) print $1,$2,$3,$4,"MAPQ="$5",LENGTH="length($12)","$16,$6}' |
      awk '{sub(/:i:/,"=",$5)}1' OFS="\t" | bedtools sort -i > "$sp2"_flanks-$sp1.bed
 fi
 
 if [ -f "$SAMsp2" ]; then echo $2 sam file found
     else echo mapping $sp1 flanks on $sp2 genome
-    bwa mem -t=$(nproc) $2 "$sp1"_flanks_300.bnk > "$sp1"_flanks-$sp2.sam
+    bwa mem -t $THREADS $2 "$sp1"_flanks_300.bnk > "$sp1"_flanks-$sp2.sam
     sam2bed < "$sp1"_flanks-$sp2.sam | awk '{if (length($12)>99) print $1,$2,$3,$4,"MAPQ="$5",LENGTH="length($12)","$16,$6}' |
      awk '{sub(/:i:/,"=",$5)}1' OFS="\t" | bedtools sort -i > "$sp1"_flanks-$sp2.bed
     echo mapping complete
@@ -217,6 +217,13 @@ cat $sp1-"$sp2"_oneline | awk -v sp1=$sp1 -v sp2=$sp2 -F">" '{if (NF<=3) print $
 
 echo "stage2 completed"
 
+# each parallel ComPair.sh job writes its own *.stat file; merge them into "stat"
+# serially so concurrent appends cannot interleave (unsafe on NFS/Lustre)
+collect_stats() {
+    find . -maxdepth 1 -type f -name "*.stat" -exec cat {} + >> stat
+    find . -maxdepth 1 -type f -name "*.stat" -delete
+}
+
 echo working with doubles
 echo splitting doubles into parts of 100
 
@@ -238,8 +245,9 @@ for i in PART*; do
       Lines=$(( $Lines - 1 ))
     done
     find -type f -name "*.cl" -print0 |
-     xargs -0 -t -I % -P $(nproc) sh -c "mafft --op 5 --quiet '%' |
-     seqkit seq -w 0 > '%.dbl'; ComPair.sh '%.dbl'; rm '%' '%.dbl'"
+     xargs -0 -t -I % -P $THREADS sh -c "mafft --op 5 --quiet '%' |
+     seqkit seq -w 0 > '%.dbl'; COMPAIR_STAT='%.dbl.stat' ComPair.sh '%.dbl'; rm '%' '%.dbl'"
+    collect_stats
     rm $i
 done
 
@@ -268,7 +276,7 @@ for i in MULTIPART*; do
     done
     rm $i
     find -type f -name "*.cl" -print0 |
-     xargs -0 -t -I % -P $(nproc) sh -c "mafft --op 5 --quiet '%' |
+     xargs -0 -t -I % -P $THREADS sh -c "mafft --op 5 --quiet '%' |
      seqkit seq -w 0 > '%.mul'; rm '%'"
 done
 
@@ -280,7 +288,7 @@ find -type f -print -name "*.mul" -print0 -exec sh -c "esl-alipid {} |
  awk  -v SINEname=$SINEname 'NR==1 {  print \$1,\$2,SINEname,"\n" }' | sed 's/\s\+/\n/g' >  '{}.list'
  seqkit grep -f '{}.list' '{}' > '{}.doub'; rm '{}.list'" \;
 
-find -type f -name "*.doub" -print0 | xargs -0 -t -I % -P $(nproc) sh -c "mafft --op 5 --quiet '%' | seqkit seq -w 0 > '%.doubles'; ComPair.sh '%.doubles'; rm '%' stat"
+find -type f -name "*.doub" -print0 | xargs -0 -t -I % -P $THREADS sh -c "mafft --op 5 --quiet '%' | seqkit seq -w 0 > '%.doubles'; COMPAIR_STAT='%.doubles.stat' ComPair.sh '%.doubles'; rm '%' '%.doubles.stat'"
 
 for i in *.mul.*bad*F *.mul.*shortRF *.mul.*.lfSINE *.mul.*.rfSINE; do rm $i "${i//.doub.doubles*/}" ; done
 
@@ -309,8 +317,9 @@ done
 for k in *.selected; do Count=$(grep -c ">" $k); if [[ $Count -ne "3" ]]; then rm $k; fi; done
 
 find -type f -name "*.selected" -print0 |
- xargs -0 -t -I % -P $(nproc) sh -c "mafft --op 5 --quiet '%' |
- seqkit seq -w 0 > '%.sel.aligned'; ComPair.sh '%.sel.aligned'; rm '%'"
+ xargs -0 -t -I % -P $THREADS sh -c "mafft --op 5 --quiet '%' |
+ seqkit seq -w 0 > '%.sel.aligned'; COMPAIR_STAT='%.sel.aligned.stat' ComPair.sh '%.sel.aligned'; rm '%'"
+collect_stats
 
 for i in *.mul.*.MP *.mul.*.PM *.mul.*.SINE; do Len=$(awk '{if (NR==2) print length}' $i);
  if [[ $Len -ge 1600 ]]

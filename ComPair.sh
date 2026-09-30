@@ -9,6 +9,7 @@
 
 echo $1
 bank=$1
+STAT=${COMPAIR_STAT:-stat} # per-job stat file when run in parallel (set by SINE_orth_loc.bash)
 seqkit range -r -1:-1 -w 0 $bank | awk -F '[^-]+' 'NR!=1 {for (i=1; i<=NF; i++) if ($i != "") print length($i)}' > $bank.gaps # first and last values are lengths of 3' and 5' rows of consecutive gaps in SINE sequence
 LF=$(awk 'NR==1' $bank.gaps) # right coordinate of the left flank
 RFlength=$(awk 'END {print}' $bank.gaps) # length of the right flank
@@ -25,14 +26,14 @@ if [[ "$LF" -le "150" ]]; then echo "Short FLANK! Trying to fix it"
     LF=$(seqkit range -r -1:-1 -w 0 $bank | awk -F '[^-]+' 'NR!=1 {print length($1)}') # recalculating new left flank coordinate
     echo new left flank $LF
 fi
-if [[ "$RFlength" -lt "150" ]]; then echo "Short FRANK!"; mv $bank $bank.shortRF; status=$(echo "shortRF"); echo $bank $status >> stat; exit; fi
+if [[ "$RFlength" -lt "150" ]]; then echo "Short FRANK!"; mv $bank $bank.shortRF; status=$(echo "shortRF"); echo $bank $status >> "$STAT"; exit; fi
 
 leftSINE=$(seqkit range -r -1:-1 -w 0 $bank | awk '/^[^-]/{if (NR==2) print "0"}')
 if [[ "$leftSINE" == 0 ]]
        then
         echo "Skipping (leftSINE)"
         mv $bank $bank.lfSINE; status=$(echo "lfSINE")
-echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST >> stat
+echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST >> "$STAT"
         exit 111 # aborting search in this locus
 fi
 
@@ -43,7 +44,7 @@ if [[ "$rightSINE" == "-" ]]
         else
         mv $bank $bank.rfSINE; status=$(echo "rfSINE")
         echo "Skipping (rightSINE)"
-echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST >> stat
+echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST >> "$STAT"
         exit 111 # aborting search in this locus
 fi
 
@@ -87,7 +88,7 @@ if [[ $LFcp -gt 65 && $LF -gt 150 && $FL -gt 65 ]] # check if FLANK is good
 		cutRF=$(awk '!/^>/ { sub(/-*$/, ""); print}' $bank.tocut | awk 'NR<3 {print length($0)}' | sort -n | head -n 1)   #delete overhang at the tail of minus sequence
 		    if [[ $cutRF -le 150 ]]
 			then echo Right flank too short; mv $bank $bank.shortRF; status=$(echo "shortRF"); rm $bank.tocut* $bank*.fai $bank.stats
-echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST >> stat; exit
+echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST >> "$STAT"; exit
 		    fi
 		seqkit subseq -r 1:$cutRF -w 0 $bank.tocut | esl-alipid - | awk 'NR==2 {print $3,$4,"FRANKcut"}' >> $bank.stats; rm $bank.tocut*
 		FRcut=$(awk -F. 'NR==9 {print $1}' $bank.stats) # identity in cut franks
@@ -109,7 +110,7 @@ echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp
 	fi
     else echo left flank bad $LFcp $LF $FL; mv $bank $bank.badLF; status=$(echo "badLF")
 fi
-echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST >> stat
+echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST >> "$STAT"
 rm $bank.seqkit.fai $bank.stats
 exit
 
