@@ -63,6 +63,8 @@ OUTPUT FILES:
     - {output}/results/statbed_{name1}-{name2}.bed     - Coordinates of validated loci
     - {output}/results/statbed_{name2}-{name1}.bed     - Reciprocal coordinates
     - {output}/results/MP_PM_SINE_{name1}-{name2}.txt  - Summary statistics
+    - {output}/results/orth_{name1}-{name2}.tsv        - One row per validated locus pair
+                                                          (input for sine_registry.py)
     - {output}/results/alignments/aln_{name1}-{name2}_{PM,MP,SINE,rejected}.aln.gz
                                                         - Alignment bundles (one per category);
                                                           open in sine_loci_browser.html or use
@@ -391,6 +393,7 @@ echo "Organizing results..."
 [[ -f "MP_PM_SINE_${NAME1}-${NAME2}.txt" ]] && mv "MP_PM_SINE_${NAME1}-${NAME2}.txt" "$RESULTS_DIR/"
 [[ -f "stat_doubles_${NAME1}-${NAME2}" ]] && mv "stat_doubles_${NAME1}-${NAME2}" "$RESULTS_DIR/"
 [[ -f "stat_multi_${NAME1}-${NAME2}" ]] && mv "stat_multi_${NAME1}-${NAME2}" "$RESULTS_DIR/"
+[[ -f "orth_${NAME1}-${NAME2}.tsv" ]] && mv "orth_${NAME1}-${NAME2}.tsv" "$RESULTS_DIR/"
 
 # Move alignment bundles
 find . -maxdepth 1 -type f -name "aln_*.aln.gz" -exec mv -t "$ALIGNMENTS_DIR/" {} +
@@ -447,6 +450,7 @@ Output Directory Structure:
     │   ├── MP_PM_SINE_${NAME1}-${NAME2}.txt (Summary statistics)
     │   ├── stat_doubles_${NAME1}-${NAME2}   (Detailed stats - doubles)
     │   ├── stat_multi_${NAME1}-${NAME2}     (Detailed stats - multis)
+    │   ├── orth_${NAME1}-${NAME2}.tsv       (Locus pairs for sine_registry.py)
     │   ├── alignments/                      (Alignment bundles, *.aln.gz)
     │   └── summary.txt                      (This file)
     ├── work/                                (Intermediate files)

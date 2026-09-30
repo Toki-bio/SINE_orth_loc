@@ -233,7 +233,7 @@ SCRATCH=$(mktemp -d "${SCRATCH_DIR:-${SLURM_TMPDIR:-${TMPDIR:-$WD}}}/SINE_orth_l
 trap 'rm -rf "$SCRATCH"' EXIT
 BUNDLE="$WD/aln_${sp1}-${sp2}"
 for t in PM MP SINE rejected; do rm -f "${BUNDLE}_$t.aln.gz"; echo "##SINE_orth_loc bundle v1" > "${BUNDLE}_$t.aln"; done
-rm -f statcoords
+rm -f statcoords statpairs
 
 # each parallel ComPair.sh job writes its own *.stat file; merge them into "stat"
 # serially so concurrent appends cannot interleave (unsafe on NFS/Lustre)
@@ -243,9 +243,11 @@ collect_stats() {
 }
 
 # coordinates of both loci in every validated alignment of the current batch
+# (statcoords: "cluster locus" per sequence; statpairs: alignment, seq1 locus, seq2 locus)
 collect_coords() {
     for i in *.cl.*.PM *.cl.*.MP *.cl.*.SINE; do [ -f "$i" ] || continue
-     awk -F:: '{if (NR==1 || NR==3) print FILENAME,$1}' $i |  awk -F. '{print $1,$NF}' | awk '{sub(/>/,"")} {print $1,$3}' >> "$WD/statcoords"
+     awk -F:: 'NR==1 || NR==3 {c=FILENAME; sub(/\..*/,"",c); h=$1; sub(/^>/,"",h); print c, h}' "$i" >> "$WD/statcoords"
+     awk -F:: 'NR==1 {h1=$1} NR==3 {h2=$1} END {sub(/^>/,"",h1); sub(/^>/,"",h2); print FILENAME"\t"h1"\t"h2}' "$i" >> "$WD/statpairs"
     done
 }
 
@@ -379,7 +381,7 @@ echo "gathering statistics"
 
 awk -F"./" '{print $2}' stat_multi_"$sp1"-"$sp2" stat_doubles_"$sp1"-"$sp2" | awk '{if ($2=="PM" || $2=="MP" || $2=="SINE") print}' | awk -F. '{print $1,$0}' > statdata
 
-touch statcoords
+touch statcoords statpairs
 
 cat statcoords statdata | sort | awk '$1 in a {print a[$1]"\n"$0; next} {a[$1]=$0}' | sort | uniq > statcomb
 
@@ -391,3 +393,16 @@ awk '{sub(/\(/,"\t0\t0\t")}{sub(/:/,"\t")}{sub(/)/,"\t")}{sub(/-/,"\t")}'1 statb
 awk '{sub(/\(/,"\t0\t0\t")}{sub(/:/,"\t")}{sub(/)/,"\t")}{sub(/-/,"\t")}'1 statbed_"$sp2"-"$sp1"_reversed > statbed_"$sp2"-"$sp1".bed
 
 awk '{if (NF>3) print $3}' statcomb | sort | uniq -c > MP_PM_SINE_"$sp1"-"$sp2".txt
+
+# one row per validated alignment, loci in alignment order (seq1 = the sequence SO refers to);
+# sine1/sine2: 1 if that locus carries the SINE. Input for sine_registry.py build.
+echo "writing orth_$sp1-$sp2.tsv"
+awk -v sp1=$sp1 -v sp2=$sp2 -F'\t' '
+ FILENAME==ARGV[1] {g1[$1]; next}
+ FILENAME==ARGV[2] || FILENAME==ARGV[3] {split($0,f," "); b=f[1]; sub(/^\.\//,"",b); m=""
+     for (i=3;i<=length(f);i++) m=m"\t"substr(f[i],index(f[i],"=")+1); met[b"."f[2]]=m; next}
+ ($1 in met) {st=$1; sub(/.*\./,"",st); cl=$1; sub(/\..*/,"",cl)
+     c1=$2; sub(/:[0-9]+-[0-9]+\([+-]\)$/,"",c1); c2=$3; sub(/:[0-9]+-[0-9]+\([+-]\)$/,"",c2)
+     print $1,cl,st,((c1 in g1)?sp1:sp2),$2,((st=="PM"||st=="SINE")?1:0),((c2 in g1)?sp1:sp2),$3,((st=="MP"||st=="SINE")?1:0) met[$1]}
+ BEGIN {OFS="\t"; print "alignment","cluster","status","species1","locus1","sine1","species2","locus2","sine2","LF","FL","LFcp","RFlength","FR","RFcp","OneTwo","OneSINE","TwoSINE","SL","SO","ST"}' \
+ "$1.fai" stat_doubles_"$sp1"-"$sp2" stat_multi_"$sp1"-"$sp2" statpairs > orth_"$sp1"-"$sp2".tsv
