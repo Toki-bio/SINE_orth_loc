@@ -38,6 +38,9 @@ OPTIONAL ARGUMENTS:
     -f,  --force                Reuse an existing output directory without asking
                                 (required for non-interactive/batch jobs)
     -t,  --threads NUM          Number of threads (default: auto-detect)
+         --scratch DIR          Directory for per-batch temporary files; use node-local
+                                storage on clusters (default: \$SLURM_TMPDIR, \$TMPDIR,
+                                else the work directory)
     -h,  --help                 Show this help message
     -v,  --version              Show version
 
@@ -60,7 +63,10 @@ OUTPUT FILES:
     - {output}/results/statbed_{name1}-{name2}.bed     - Coordinates of validated loci
     - {output}/results/statbed_{name2}-{name1}.bed     - Reciprocal coordinates
     - {output}/results/MP_PM_SINE_{name1}-{name2}.txt  - Summary statistics
-    - {output}/results/alignments/                     - Individual alignment files
+    - {output}/results/alignments/aln_{name1}-{name2}_{PM,MP,SINE,rejected}.aln.gz
+                                                        - Alignment bundles (one per category);
+                                                          open in sine_loci_browser.html or use
+                                                          aln_bundle.sh list|get|extract
 
 NOTES:
     - Input FASTA files can have any extension (.fa, .fasta, .fna, etc.)
@@ -86,6 +92,7 @@ NAME2=""
 KEEP_INTERMEDIATES=false
 FORCE=false
 THREADS=""
+SCRATCH=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -129,6 +136,10 @@ while [[ $# -gt 0 ]]; do
         -f|--force)
             FORCE=true
             shift
+            ;;
+        --scratch)
+            SCRATCH="$2"
+            shift 2
             ;;
         -t|--threads)
             THREADS="$2"
@@ -212,7 +223,7 @@ validate_bed "$BED2" "BED2"
 
 # Check required tools
 echo "Checking required tools..."
-REQUIRED_TOOLS=("mafft" "esl-alipid" "seqkit" "bedtools" "samtools" "bwa" "sam2bed")
+REQUIRED_TOOLS=("mafft" "esl-alipid" "seqkit" "bedtools" "samtools" "bwa" "sam2bed" "gawk")
 MISSING_TOOLS=()
 
 for tool in "${REQUIRED_TOOLS[@]}"; do
@@ -352,6 +363,10 @@ ORIGINAL_DIR=$(pwd)
 if [[ -n "$THREADS" ]]; then
     export THREADS
 fi
+if [[ -n "$SCRATCH" ]]; then
+    mkdir -p "$SCRATCH" || error_exit "Cannot create scratch directory: $SCRATCH"
+    export SCRATCH_DIR=$(readlink -f "$SCRATCH")
+fi
 
 # Run the original script
 set -o pipefail
@@ -377,11 +392,8 @@ echo "Organizing results..."
 [[ -f "stat_doubles_${NAME1}-${NAME2}" ]] && mv "stat_doubles_${NAME1}-${NAME2}" "$RESULTS_DIR/"
 [[ -f "stat_multi_${NAME1}-${NAME2}" ]] && mv "stat_multi_${NAME1}-${NAME2}" "$RESULTS_DIR/"
 
-# Move alignment files
-# find instead of *.ext globs: with 10^5 alignments a glob exceeds the argument limit
-for ext in PM MP SINE; do
-    find . -maxdepth 1 -type f -name "*.${ext}" -exec mv -t "$ALIGNMENTS_DIR/" {} +
-done
+# Move alignment bundles
+find . -maxdepth 1 -type f -name "aln_*.aln.gz" -exec mv -t "$ALIGNMENTS_DIR/" {} +
 
 # Create summary report
 SUMMARY_FILE="${RESULTS_DIR}/summary.txt"
@@ -415,16 +427,17 @@ if [[ -f "${RESULTS_DIR}/MP_PM_SINE_${NAME1}-${NAME2}.txt" ]]; then
 fi
 
 # Count alignment files
-PM_COUNT=$(find "$ALIGNMENTS_DIR" -maxdepth 1 -type f -name "*.PM" | wc -l)
-MP_COUNT=$(find "$ALIGNMENTS_DIR" -maxdepth 1 -type f -name "*.MP" | wc -l)
-SINE_COUNT=$(find "$ALIGNMENTS_DIR" -maxdepth 1 -type f -name "*.SINE" | wc -l)
+count_alignments() { zcat -f "$ALIGNMENTS_DIR/aln_${NAME1}-${NAME2}_$1.aln.gz" 2>/dev/null | grep -c '^##FILE '; }
+PM_COUNT=$(count_alignments PM)
+MP_COUNT=$(count_alignments MP)
+SINE_COUNT=$(count_alignments SINE)
 
 cat >> "$SUMMARY_FILE" << EOF
 
-Alignment Files:
-  Plus-Minus (PM):  ${PM_COUNT} files
-  Minus-Plus (MP):  ${MP_COUNT} files
-  Both have SINE:   ${SINE_COUNT} files
+Alignments (bundled in results/alignments/aln_${NAME1}-${NAME2}_*.aln.gz):
+  Plus-Minus (PM):  ${PM_COUNT}
+  Minus-Plus (MP):  ${MP_COUNT}
+  Both have SINE:   ${SINE_COUNT}
 
 Output Directory Structure:
   ${OUTPUT_DIR}/
@@ -434,7 +447,7 @@ Output Directory Structure:
     │   ├── MP_PM_SINE_${NAME1}-${NAME2}.txt (Summary statistics)
     │   ├── stat_doubles_${NAME1}-${NAME2}   (Detailed stats - doubles)
     │   ├── stat_multi_${NAME1}-${NAME2}     (Detailed stats - multis)
-    │   ├── alignments/                      (Individual alignments)
+    │   ├── alignments/                      (Alignment bundles, *.aln.gz)
     │   └── summary.txt                      (This file)
     ├── work/                                (Intermediate files)
     └── pipeline.log                         (Complete log)

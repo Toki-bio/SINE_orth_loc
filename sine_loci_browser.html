@@ -71,7 +71,7 @@
   .tb-btn:hover { background: #e4e8f4; border-color: var(--accent); color: var(--text-bright); }
   .tb-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
-  #folderLabel {
+  #folderLabel, #bundleLabel {
     background: var(--accent);
     color: #fff;
     border: none;
@@ -82,7 +82,7 @@
     cursor: pointer;
     white-space: nowrap;
   }
-  #folderLabel:hover { background: #4a7bc8; }
+  #folderLabel:hover, #bundleLabel:hover { background: #4a7bc8; }
 
   #fileInfo {
     font-size: 11px;
@@ -498,6 +498,9 @@
   <label id="folderLabel">📂 Open Folder
     <input type="file" id="folderInput" webkitdirectory multiple accept="" style="display:none">
   </label>
+  <label id="bundleLabel" title="Open alignment bundles (aln_*.aln.gz) written by SINE_orth_loc">📦 Open Bundle
+    <input type="file" id="bundleInput" multiple accept=".aln,.gz" style="display:none">
+  </label>
   <span id="loadProgress" style="font-size:11px;color:var(--accent);display:none;">Loading…</span>
   <div class="sep"></div>
   <div id="filterRow">
@@ -552,7 +555,7 @@
     <div id="emptyState">
       <div class="icon">🧬</div>
       <h2>No alignment loaded</h2>
-      <p>Open a folder containing <code>.PM</code>, <code>.MP</code>, or <code>.SINE</code> alignment files produced by SINE_orth_loc.</p>
+      <p>Open alignment bundles (<code>aln_*_PM.aln.gz</code>, <code>_MP</code>, <code>_SINE</code>) produced by SINE_orth_loc,<br>or a folder containing <code>.PM</code>, <code>.MP</code>, or <code>.SINE</code> alignment files.</p>
     </div>
 
     <!-- single view -->
@@ -576,7 +579,7 @@
 
 <script>
 // ── State ──────────────────────────────────────────────────────────────────
-let allFiles = [];   // {name, type, file} — text NOT pre-loaded
+let allFiles = [];   // {name, type, file} — text NOT pre-loaded; bundle entries carry {text} instead of {file}
 let filtered = [];   // filtered subset
 let currentIdx = 0;
 let viewMode = 'single';
@@ -585,6 +588,7 @@ let textFilter = '';
 let _textCache = new Map(); // name → text, loaded on demand
 
 async function getFileText(f) {
+  if (f.text !== undefined) return f.text;
   if (_textCache.has(f.name)) return _textCache.get(f.name);
   const text = await f.file.text();
   _textCache.set(f.name, text);
@@ -665,19 +669,76 @@ document.getElementById('folderInput').addEventListener('change', e => {
     const ext = f.name.split('.').pop().toUpperCase();
     return ['PM','MP','SINE'].includes(ext);
   });
-  wanted.sort((a,b) => a.name.localeCompare(b.name, undefined, {numeric:true}));
-
   // Only store metadata — no text reading yet
-  _textCache.clear();
-  allFiles = wanted.map(f => ({
+  setEntries(wanted.map(f => ({
     name: f.name,
     type: f.name.split('.').pop().toUpperCase(),
     file: f
-  }));
+  })), 'files found');
+});
 
-  const info = document.getElementById('fileInfo');
-  info.textContent = `${allFiles.length} files found`;
+function setEntries(entries, what) {
+  entries.sort((a,b) => a.name.localeCompare(b.name, undefined, {numeric:true}));
+  _textCache.clear();
+  allFiles = entries;
+  document.getElementById('fileInfo').textContent = `${allFiles.length} ${what}`;
   applyFilter();
+}
+
+// ── Bundle loading ──────────────────────────────────────────────────────────
+// A bundle is "##FILE <name>" followed by that alignment (FASTA), repeated;
+// .gz bundles are decompressed in the browser. Read as a stream, so no single
+// huge string is built even for bundles with 10^5 alignments.
+async function* bundleLines(file) {
+  let stream = file.stream();
+  if (file.name.endsWith('.gz')) stream = stream.pipeThrough(new DecompressionStream('gzip'));
+  const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
+  let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += value;
+    const lines = buf.split('\n');
+    buf = lines.pop();
+    for (const line of lines) yield line;
+  }
+  if (buf) yield buf;
+}
+
+async function readBundle(file, out) {
+  let name = null, lines = [];
+  const flush = () => {
+    if (name === null) return;
+    const type = name.split('.').pop().toUpperCase();
+    if (['PM','MP','SINE'].includes(type)) out.push({ name, type, text: lines.join('\n') + '\n' });
+  };
+  for await (const raw of bundleLines(file)) {
+    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+    if (line.startsWith('##FILE ')) { flush(); name = line.slice(7).trim(); lines = []; }
+    else if (name !== null) lines.push(line);
+  }
+  flush();
+}
+
+document.getElementById('bundleInput').addEventListener('change', async e => {
+  const files = Array.from(e.target.files);
+  e.target.value = '';
+  if (!files.length) return;
+  const progress = document.getElementById('loadProgress');
+  progress.style.display = '';
+  const entries = [];
+  try {
+    for (const f of files) {
+      progress.textContent = `Loading ${f.name}…`;
+      await readBundle(f, entries);
+    }
+  } catch (err) {
+    alert(`Could not read bundle: ${err.message}`);
+    return;
+  } finally {
+    progress.style.display = 'none';
+  }
+  setEntries(entries, `alignments from ${files.length} bundle${files.length > 1 ? 's' : ''}`);
 });
 
 // ── Block size controls ──────────────────────────────────────────────────────

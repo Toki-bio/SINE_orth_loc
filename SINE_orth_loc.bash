@@ -21,6 +21,8 @@ for tool in mafft esl-alipid seqkit bedtools samtools sam2bed bwa ComPair.sh; do
     exit 1
     fi
 done
+# the cluster grouping step uses gawk-only features; with mawk it silently finds no loci
+if ! awk --version 2>/dev/null | grep -q "GNU Awk"; then echo "awk is not GNU awk (gawk): install gawk"; exit 1; fi
 
 seqkit seq -w 0 $3 > SINE.q # linearising SINE sequence
 SINElength=$(seqkit seq -w 0 $3 | awk 'NR==2 {print length}') # calculating SINE length
@@ -217,23 +219,48 @@ cat $sp1-"$sp2"_oneline | awk -v sp1=$sp1 -v sp2=$sp2 -F">" '{if (NF<=3) print $
 
 echo "stage2 completed"
 
+# Doubles and multies are processed in batches of 100 clusters. Each batch runs
+# in its own scratch directory (node-local if SCRATCH_DIR, SLURM_TMPDIR or TMPDIR
+# is set), and its alignments are appended to one bundle per category, so the
+# shared work directory never holds one file per locus:
+#   aln_<sp1>-<sp2>_PM.aln.gz  _MP.aln.gz  _SINE.aln.gz  _rejected.aln.gz
+# A bundle is plain text: "##FILE <name>" followed by that alignment (FASTA).
+# Use aln_bundle.sh to list/extract, or open them in sine_loci_browser.html.
+
+WD=$(pwd)
+SINEfa=$(readlink -f "$3")
+SCRATCH=$(mktemp -d "${SCRATCH_DIR:-${SLURM_TMPDIR:-${TMPDIR:-$WD}}}/SINE_orth_loc_${sp1}-${sp2}.XXXXXX") || exit 1
+trap 'rm -rf "$SCRATCH"' EXIT
+BUNDLE="$WD/aln_${sp1}-${sp2}"
+for t in PM MP SINE rejected; do rm -f "${BUNDLE}_$t.aln.gz"; echo "##SINE_orth_loc bundle v1" > "${BUNDLE}_$t.aln"; done
+rm -f statcoords
+
 # each parallel ComPair.sh job writes its own *.stat file; merge them into "stat"
 # serially so concurrent appends cannot interleave (unsafe on NFS/Lustre)
 collect_stats() {
-    find . -maxdepth 1 -type f -name "*.stat" -exec cat {} + >> stat
+    find . -maxdepth 1 -type f -name "*.stat" -exec cat {} + >> "$WD/stat"
     find . -maxdepth 1 -type f -name "*.stat" -delete
 }
 
-echo working with doubles
-echo splitting doubles into parts of 100
+# coordinates of both loci in every validated alignment of the current batch
+collect_coords() {
+    for i in *.cl.*.PM *.cl.*.MP *.cl.*.SINE; do [ -f "$i" ] || continue
+     awk -F:: '{if (NR==1 || NR==3) print FILENAME,$1}' $i |  awk -F. '{print $1,$NF}' | awk '{sub(/>/,"")} {print $1,$3}' >> "$WD/statcoords"
+    done
+}
 
-awk 'NR%100==1{x="PART"++i;}{print > x}' $sp1-"$sp2"_double
+# append every alignment left in the current batch directory to the bundles
+bundle_batch() {
+    find . -maxdepth 1 -type f ! -name "*.fai" ! -name "*.stats" -print0 |
+     xargs -0 -r awk -v b="$BUNDLE" 'FNR==1 {n=FILENAME; sub(/^\.\//,"",n); t=n; sub(/.*\./,"",t)
+      if (t!="PM" && t!="MP" && t!="SINE") t="rejected"; out=b"_"t".aln"; print "##FILE " n >> out}
+      {print >> out}'
+}
 
-echo analyzing parts
-
-for i in PART*; do
-    Lines=$(awk 'END {print NR}' $i)
-    clstrs=$i
+# write one <cluster>.cl FASTA (cluster sequences + SINE consensus) per line of a PART file
+make_clusters() {
+    clstrs=$1
+    Lines=$(awk 'END {print NR}' $clstrs)
     while [ $Lines -ge 1 ]
      do
       echo "Processing $Lines line"
@@ -241,14 +268,91 @@ for i in PART*; do
       cName=$(echo $CurrCluster | awk '{print $1}')
       echo $CurrCluster |
        awk '{sub(/ /,"\n")}{gsub(/,>/,"\n>")}{gsub(/SeqStart/,"\n")} {print}' |
-       awk 'NR==1 {a=$0} NR!=1 {if ($0 ~ ">") {print $0"::"a} else print}' | cat - $3 > "$cName".cl
+       awk 'NR==1 {a=$0} NR!=1 {if ($0 ~ ">") {print $0"::"a} else print}' | cat - "$SINEfa" > "$cName".cl
       Lines=$(( $Lines - 1 ))
     done
-    find -type f -name "*.cl" -print0 |
+}
+
+# run a per-batch function in a fresh scratch directory, then bundle and clean up
+run_batch() {
+    local part=$1 func=$2 B="$SCRATCH/$1"
+    mkdir -p "$B" && cd "$B" || exit 1
+    make_clusters "$WD/$part"
+    $func
+    collect_stats
+    collect_coords
+    bundle_batch
+    cd "$WD" && rm -rf "$B" && rm "$part"
+}
+
+align_doubles() {
+    find . -type f -name "*.cl" -print0 |
      xargs -0 -t -I % -P $THREADS sh -c "mafft --op 5 --quiet '%' |
      seqkit seq -w 0 > '%.dbl'; COMPAIR_STAT='%.dbl.stat' ComPair.sh '%.dbl'; rm '%' '%.dbl'"
-    collect_stats
-    rm $i
+}
+
+align_multies() {
+    find . -type f -name "*.cl" -print0 |
+     xargs -0 -t -I % -P $THREADS sh -c "mafft --op 5 --quiet '%' |
+     seqkit seq -w 0 > '%.mul'; rm '%'"
+
+    echo finding best pair of sequences in each cluster
+
+    find . -type f -name "*.mul" -exec sh -c "esl-alipid {} |
+     awk -v sp1=$sp1 -v sp2=$sp2 -v SINEname=$SINEname 'NR>1 (sp1=substr(\$1,1,3)) (sp2=substr(\$2,1,3)) {if (sp1!=sp2 && \$0 !~SINEname) print}' |
+     LC_ALL=C sort -r -k 3 -g |
+     awk  -v SINEname=$SINEname 'NR==1 {  print \$1,\$2,SINEname,"\n" }' | sed 's/\s\+/\n/g' >  '{}.list'
+     seqkit grep -f '{}.list' '{}' > '{}.doub'; rm '{}.list'" \;
+
+    find . -type f -name "*.doub" -print0 | xargs -0 -t -I % -P $THREADS sh -c "mafft --op 5 --quiet '%' | seqkit seq -w 0 > '%.doubles'; COMPAIR_STAT='%.doubles.stat' ComPair.sh '%.doubles'; rm '%' '%.doubles.stat'"
+
+    for i in *.mul.*bad*F *.mul.*shortRF *.mul.*.lfSINE *.mul.*.rfSINE; do [ -f "$i" ] || continue; rm $i "${i//.doub.doubles*/}" ; done
+
+    echo "finding all good sequences in each cluster by similarity in right flanks"
+
+    for i in *.mul.*.MP *.mul.*.PM *.mul.*.SINE; do [ -f "$i" ] || continue;
+     name1=$(awk 'NR==1{print substr($1,2)}' "$i");
+     name2=$(awk 'NR==3{print substr($1,2)}' "$i");
+    echo name1=$name1 name2=$name2;
+     SINEend=$(seqkit range -r -1:-1 -w 0 "${i//.doub.doubles*/}" | awk -F '[^-]+' 'END {print length($NF)}');
+     ALIGNMENTend=$(seqkit range -r -1:-1 -w 0 "${i//.doub.doubles*/}" | awk 'END {print length}');
+     CUT=$((ALIGNMENTend-SINEend+1));
+    awk -v CUT=$CUT -v ALIGNMENTend=$ALIGNMENTend 'BEGIN{RS=">";FS="\n"}NR>1{seq="";
+    for (i=2;i<=NF;i++) seq=seq""$i; print ">"$1"\n"substr(seq,CUT,ALIGNMENTend-CUT)}' "${i//.doub.doubles*/}" |
+     esl-alipid - | awk -v name1="$name1" -v name2="$name2" -v SINEname=$SINEname '$0!~SINEname {if ($1==name1 || $1==name2) print}' |
+     awk '{if ($3>40.00) print $1"\n"$2}' |
+     awk -v name1="$name1" -v name2="$name2" '{print}END {print name1"\n"name2}' | awk '!seen[$0]++' > $i.list; ListSize=$(awk 'END{print NR}' $i.list)
+    if [[ $ListSize -eq 0 ]]; then mv $i $i."sel.aligned"; rm $i.list
+     else
+     seqkit grep -f $i.list -w 0 "${i//.doub.doubles*/}" > $i.SelSeq; rm $i.list
+     seqkit range -r -1:-1 -w 0 $i > $i.SelSINE; cat $i.SelSeq $i.SelSINE > $i.selected;
+     rm $i "${i//.doub.doubles*/}" $i.SelSeq $i.SelSINE;
+    fi
+    done
+
+    for k in *.selected; do [ -f "$k" ] || continue; Count=$(grep -c ">" $k); if [[ $Count -ne "3" ]]; then rm $k; fi; done
+
+    find . -type f -name "*.selected" -print0 |
+     xargs -0 -t -I % -P $THREADS sh -c "mafft --op 5 --quiet '%' |
+     seqkit seq -w 0 > '%.sel.aligned'; COMPAIR_STAT='%.sel.aligned.stat' ComPair.sh '%.sel.aligned'; rm '%'"
+
+    for i in *.mul.*.MP *.mul.*.PM *.mul.*.SINE; do [ -f "$i" ] || continue; Len=$(awk '{if (NR==2) print length}' $i);
+     if [[ $Len -ge 1600 ]]
+         then rm $i
+     fi
+    done
+}
+
+echo working with doubles
+echo splitting doubles into parts of 100
+
+: > stat
+awk 'NR%100==1{x="PART"++i;}{print > x}' $sp1-"$sp2"_double
+
+echo analyzing parts
+
+for i in PART*; do [ -f "$i" ] || continue
+    run_batch "$i" align_doubles
 done
 
 mv stat stat_doubles_"$sp1"-"$sp2"
@@ -257,83 +361,25 @@ echo "stage3 - aligning doubles - completed"
 
 echo "working with multies"
 
+: > stat
 awk 'NR%100==1{x="MULTIPART"++i;}{print > x}' $sp1-"$sp2"_multi
 
 echo aligning clusters
 
-for i in MULTIPART*; do
-    Lines=$(awk 'END {print NR}' $i)
-    clstrs=$i
-    while [ $Lines -ge 1 ]
-     do
-      echo "Processing $Lines line"
-      CurrCluster=$(awk -v line=$Lines 'NR == line' $clstrs)
-      cName=$(echo $CurrCluster | awk '{print $1}')
-      echo $CurrCluster |
-       awk '{sub(/ /,"\n")}{gsub(/,>/,"\n>")}{gsub(/SeqStart/,"\n")} {print}' |
-       awk 'NR==1 {a=$0} NR!=1 {if ($0 ~ ">") {print $0"::"a} else print}' | cat - $3 > "$cName".cl
-      Lines=$(( $Lines - 1 ))
-    done
-    rm $i
-    find -type f -name "*.cl" -print0 |
-     xargs -0 -t -I % -P $THREADS sh -c "mafft --op 5 --quiet '%' |
-     seqkit seq -w 0 > '%.mul'; rm '%'"
-done
-
-echo finding best pair of sequences in each cluster
-
-find -type f -print -name "*.mul" -print0 -exec sh -c "esl-alipid {} |
- awk -v sp1=$sp1 -v sp2=$sp2 -v SINEname=$SINEname 'NR>1 (sp1=substr(\$1,1,3)) (sp2=substr(\$2,1,3)) {if (sp1!=sp2 && \$0 !~SINEname) print}' |
- LC_ALL=C sort -r -k 3 -g |
- awk  -v SINEname=$SINEname 'NR==1 {  print \$1,\$2,SINEname,"\n" }' | sed 's/\s\+/\n/g' >  '{}.list'
- seqkit grep -f '{}.list' '{}' > '{}.doub'; rm '{}.list'" \;
-
-find -type f -name "*.doub" -print0 | xargs -0 -t -I % -P $THREADS sh -c "mafft --op 5 --quiet '%' | seqkit seq -w 0 > '%.doubles'; COMPAIR_STAT='%.doubles.stat' ComPair.sh '%.doubles'; rm '%' '%.doubles.stat'"
-
-for i in *.mul.*bad*F *.mul.*shortRF *.mul.*.lfSINE *.mul.*.rfSINE; do rm $i "${i//.doub.doubles*/}" ; done
-
-echo "finding all good sequences in each cluster by similarity in right flanks"
-
-for i in *.mul.*.MP *.mul.*.PM *.mul.*.SINE; do [ -f "$i" ] || continue;
- name1=$(awk 'NR==1{print substr($1,2)}' "$i");
- name2=$(awk 'NR==3{print substr($1,2)}' "$i");
-echo name1=$name1 name2=$name2;
- SINEend=$(seqkit range -r -1:-1 -w 0 "${i//.doub.doubles*/}" | awk -F '[^-]+' 'END {print length($NF)}');
- ALIGNMENTend=$(seqkit range -r -1:-1 -w 0 "${i//.doub.doubles*/}" | awk 'END {print length}');
- CUT=$((ALIGNMENTend-SINEend+1));
-awk -v CUT=$CUT -v ALIGNMENTend=$ALIGNMENTend 'BEGIN{RS=">";FS="\n"}NR>1{seq="";
-for (i=2;i<=NF;i++) seq=seq""$i; print ">"$1"\n"substr(seq,CUT,ALIGNMENTend-CUT)}' "${i//.doub.doubles*/}" |
- esl-alipid - | awk -v name1="$name1" -v name2="$name2" -v SINEname=$SINEname '$0!~SINEname {if ($1==name1 || $1==name2) print}' |
- awk '{if ($3>40.00) print $1"\n"$2}' |
- awk -v name1="$name1" -v name2="$name2" '{print}END {print name1"\n"name2}' | awk '!seen[$0]++' > $i.list; ListSize=$(awk 'END{print NR}' $i.list)
-if [[ $ListSize -eq 0 ]]; then mv $i $i."sel.aligned"; rm $i.list
- else
- seqkit grep -f $i.list -w 0 "${i//.doub.doubles*/}" > $i.SelSeq; rm $i.list
- seqkit range -r -1:-1 -w 0 $i > $i.SelSINE; cat $i.SelSeq $i.SelSINE > $i.selected;
- rm $i "${i//.doub.doubles*/}" $i.SelSeq $i.SelSINE;
-fi
-done
-
-for k in *.selected; do Count=$(grep -c ">" $k); if [[ $Count -ne "3" ]]; then rm $k; fi; done
-
-find -type f -name "*.selected" -print0 |
- xargs -0 -t -I % -P $THREADS sh -c "mafft --op 5 --quiet '%' |
- seqkit seq -w 0 > '%.sel.aligned'; COMPAIR_STAT='%.sel.aligned.stat' ComPair.sh '%.sel.aligned'; rm '%'"
-collect_stats
-
-for i in *.mul.*.MP *.mul.*.PM *.mul.*.SINE; do Len=$(awk '{if (NR==2) print length}' $i);
- if [[ $Len -ge 1600 ]]
-     then rm $i
- fi
+for i in MULTIPART*; do [ -f "$i" ] || continue
+    run_batch "$i" align_multies
 done
 
 mv stat stat_multi_"$sp1"-"$sp2"
+
+echo compressing alignment bundles
+for t in PM MP SINE rejected; do gzip -f "${BUNDLE}_$t.aln"; done
 
 echo "gathering statistics"
 
 awk -F"./" '{print $2}' stat_multi_"$sp1"-"$sp2" stat_doubles_"$sp1"-"$sp2" | awk '{if ($2=="PM" || $2=="MP" || $2=="SINE") print}' | awk -F. '{print $1,$0}' > statdata
 
-for i in *.cl.*.PM *.cl.*.MP *.cl.*.SINE; do awk -F:: '{if (NR==1 || NR==3) print FILENAME,$1}' $i |  awk -F. '{print $1,$NF}' | awk '{sub(/>/,"")} {print $1,$3}' >> statcoords; done
+touch statcoords
 
 cat statcoords statdata | sort | awk '$1 in a {print a[$1]"\n"$0; next} {a[$1]=$0}' | sort | uniq > statcomb
 
