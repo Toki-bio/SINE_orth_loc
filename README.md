@@ -1,6 +1,39 @@
 # SINE_orth_loc
 Search for the orthologous SINE-containing loci in two genome assemblies
 
+## Versions
+
+| Version | Commit | What it is |
+| :- | :- | :- |
+| [`v1.0-genes2023`](https://github.com/Toki-bio/SINE_orth_loc/tree/v1.0-genes2023) | `5c6c456` | The workflow used in Kosushkin et al. 2023, *Genes* 14(11):2089 ([doi:10.3390/genes14112089](https://doi.org/10.3390/genes14112089)) |
+| [`v2.0`](https://github.com/Toki-bio/SINE_orth_loc/tree/v2.0) | | Current version (this branch) |
+
+To reproduce the published analysis, use `v1.0-genes2023`:
+`git clone --branch v1.0-genes2023 https://github.com/Toki-bio/SINE_orth_loc`.
+
+Changes in v2.0, with the same classification logic (`ComPair.sh` thresholds unchanged):
+
+- Alignments are written to one bundle per category instead of one file per locus;
+  batches run in scratch space (see below). Added `aln_bundle.sh` and bundle mode in
+  `sine_loci_browser.html`.
+- `orth_<sp1>-<sp2>.tsv` per pair and `sine_registry.py` for multi-species locus matrices.
+- `SINE_orth_loc_flexible.sh` wrapper (input checks, `--threads`, `--scratch`, `--force`).
+- Fixes that can change results of some runs:
+  - chromosome names containing dots (e.g. `NC_000001.11`) produced empty coordinates in
+    `statbed_*`;
+  - parallel `ComPair.sh` jobs appended to one shared `stat` file, which can lose or
+    interleave lines on network file systems;
+  - `bwa mem -t=N` was not read as a thread count (mapping ran single-threaded);
+  - the tool check did not detect missing tools, and mawk instead of GNU awk silently
+    produced no loci.
+- Removed `SINE_orth_loc.sh`, an outdated copy of `SINE_orth_loc.bash` that called
+  `ComPair.sh` by its former name `script10` (still available in `v1.0-genes2023`).
+
+On a simulated genome pair, v2.0 gives the same `statbed_*`, `MP_PM_SINE_*` and
+alignments as the previous version.
+
+If you use SINE_orth_loc, please cite the paper (see `CITATION.cff`).
+
 ## Usage
 
     SINE_orth_loc_flexible.sh -g1 sp1.fa -g2 sp2.fa -s SINE.fa -b1 sp1_SINE.bed -b2 sp2_SINE.bed \

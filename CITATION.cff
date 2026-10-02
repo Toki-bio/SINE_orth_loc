@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+message: "If you use SINE_orth_loc, please cite the paper below."
+title: SINE_orth_loc
+type: software
+authors:
+  - family-names: Kosushkin
+    given-names: Sergei
+repository-code: "https://github.com/Toki-bio/SINE_orth_loc"
+keywords:
+  - SINE
+  - orthologous loci
+  - retrotransposon insertion polymorphism
+  - comparative genomics
+preferred-citation:
+  type: article
+  title: "Interspecific comparison of orthologous SINE loci using whole-genome data"
+  authors:
+    - family-names: Kosushkin
+      given-names: Sergei
+    - family-names: Korchagin
+      given-names: Vitaly
+    - family-names: Vergun
+      given-names: Andrey
+    - family-names: Ryskov
+      given-names: Alexey
+  journal: Genes
+  year: 2023
+  volume: 14
+  issue: 11
+  start: 2089
+  doi: 10.3390/genes14112089
