@@ -11,7 +11,9 @@
       bwa index PREFIX.fa; bwa mem -t 8 PREFIX.fa reads.fq > sample.sam          (short reads)
       minimap2 -ax map-hifi -t 8 PREFIX.fa reads.fq > sample.sam                  (HiFi)
 
-  call       Decide for every confidently placed read (MAPQ >= --min-mapq, primary or
+  call       (= count + genotype for one SAM; use count on each SAM and genotype on all count
+             files to combine several read files of one sample.)
+             Decide for every confidently placed read (MAPQ >= --min-mapq, primary or
              supplementary) which allele it shows at a group: a junction crossed with at least
              --anchor bp on both sides, or the SINE missing from the SINE template (deletion) /
              a SINE-sized insertion in the empty template. One vote per read and group. Junctions
@@ -144,21 +146,27 @@ def parse_alignment(cigar, start, max_del):
     return spans, dels, ins
 
 
-def cmd_call(args):
-    tpl = {}
-    groups = []
-    with open(args.templates) as fh:
+def load_templates(path):
+    tpl, groups = {}, []
+    with open(path) as fh:
         fh.readline()
         for line in fh:
             g, allele, _, _, js = line.rstrip('\n').split('\t')
             tpl[f'{g}|{allele}'] = [int(x) for x in js.split(',')]
             if allele == 'P':
                 groups.append(g)
+    return tpl, groups
+
+
+COUNT_COLS = ['P_reads', 'A_reads', 'hq_P0', 'hq_P1', 'hq_A', 'lq_P0', 'lq_P1', 'lq_A']
+
+
+def count_sam(args, tpl):
+    """Per group: reads showing each allele, and confident / ambiguous reads per junction."""
     W, T = args.anchor, args.tol
-    read_ev = collections.defaultdict(set)          # (read, group) -> {'P', 'A'} from confident alignments
-    hq = collections.Counter()                      # (group, junction) -> confident reads at that junction
-    lq = collections.Counter()                      # (group, junction) -> ambiguously placed reads
-    lengths = []
+    read_ev = collections.defaultdict(set)
+    hq, lq = collections.Counter(), collections.Counter()
+    n_len = sum_len = 0
     with open_text(args.sam) as fh:
         for line in fh:
             if line.startswith('@'):
@@ -167,8 +175,9 @@ def cmd_call(args):
             flag = int(f[1])
             if flag & (4 | 256):
                 continue
-            if not flag & 2048 and f[9] != '*' and len(lengths) < 100000:
-                lengths.append(len(f[9]))
+            if not flag & 2048 and f[9] != '*' and n_len < 100000:
+                n_len += 1
+                sum_len += len(f[9])
             tname = f[2]
             js = tpl.get(tname)
             if js is None:
@@ -176,20 +185,20 @@ def cmd_call(args):
             g, allele = tname.rsplit('|', 1)
             spans, dels, ins = parse_alignment(f[5], int(f[3]) - 1, args.max_del)
             cover = lambda a, b: any(s <= a and e >= b for s, e in spans)
-            found = []                              # (junction id, allele supported)
+            found = []
             if allele == 'P':
                 j1, j2 = js
                 for k, j in enumerate(js):
                     if cover(j - W, j + W):
                         found.append((f'P{k}', 'P'))
-                for ds, de in dels:                 # the SINE missing: read from an empty allele
+                for ds, de in dels:
                     if abs(ds - j1) <= T and abs(de - j2) <= T and cover(j1 - W, ds) and cover(de, j2 + W):
                         found.append(('A', 'A'))
             else:
                 j = js[0]
                 if cover(j - W, j + W):
                     found.append(('A', 'A'))
-                for pos, n in ins:                  # a SINE-sized insertion at the empty site
+                for pos, n in ins:
                     if abs(pos - j) <= T and n >= args.min_ins and cover(j - W, pos) and cover(pos, j + W):
                         found.append(('P0', 'P'))
             confident = int(f[4]) >= args.min_mapq
@@ -199,28 +208,35 @@ def cmd_call(args):
                     read_ev[(f[0], g)].add(al)
                 else:
                     lq[(g, jid)] += 1
-    L = sum(lengths) / len(lengths) if lengths else 150
-    per_group = collections.defaultdict(lambda: [0, 0])
+    counts = collections.defaultdict(lambda: [0] * len(COUNT_COLS))
     for (read, g), al in read_ev.items():
         if len(al) == 1:
-            per_group[g][0 if 'P' in al else 1] += 1
+            counts[g][0 if 'P' in al else 1] += 1
+    for (g, jid), n in hq.items():
+        counts[g][{'P0': 2, 'P1': 3, 'A': 4}[jid]] += n
+    for (g, jid), n in lq.items():
+        counts[g][{'P0': 5, 'P1': 6, 'A': 7}[jid]] += n
+    return counts, n_len, sum_len
+
+
+def genotype(args, tpl, groups, counts, mean_len, out_path):
+    W = args.anchor
     e = args.error
     fs = [0.0, 0.5, 1.0] if args.ploidy == 2 else [0.0, 1.0]
     labels = ['0/0', '0/1', '1/1'] if args.ploidy == 2 else ['0', '1']
     nocall = './.' if args.ploidy == 2 else '.'
     tally = collections.Counter()
-    with open(args.out, 'w') as out:
+    w = max(1.0, mean_len - 2 * W)
+    with open(out_path, 'w') as out:
         out.write('group\tP_reads\tA_reads\tP_junctions_informative\tGT\tGQ\n')
         for g in groups:
-            k, a = per_group[g]
+            k, a, hq0, hq1, hqa, lq0, lq1, lqa = counts.get(g, [0] * len(COUNT_COLS))
             j1, j2 = tpl[f'{g}|P']
             # a junction is informative unless most reads at it are ambiguously placed
-            inf = [lq[(g, f'P{x}')] <= hq[(g, f'P{x}')] for x in (0, 1)]
-            m = sum(inf)
-            a_inf = lq[(g, 'A')] <= hq[(g, 'A')]
+            m = (lq0 <= hq0) + (lq1 <= hq1)
+            a_inf = lqa <= hqa
             # reads a SINE-carrying haplotype yields relative to an empty one: one read window of
             # length L - 2W per informative junction, overlapping when reads are longer than the SINE
-            w = max(1.0, L - 2 * W)
             ratio = 1.0 if m < 2 else (w + min(j2 - j1, w)) / w
             if m == 0 or not a_inf or k + a < args.min_reads:
                 gt, gq = nocall, 0
@@ -236,8 +252,43 @@ def cmd_call(args):
                 gq = min(99, int(round(10 * (ll[best] - second) / math.log(10))))
             tally[gt] += 1
             out.write(f'{g}\t{k}\t{a}\t{m}\t{gt}\t{gq}\n')
-    print(f'{len(groups)} groups (mean read length {L:.0f}): ' + ', '.join(f'{k} {v}' for k, v in sorted(tally.items())),
+    print(f'{len(groups)} groups (mean read length {mean_len:.0f}): ' + ', '.join(f'{k} {v}' for k, v in sorted(tally.items())),
           file=sys.stderr)
+
+
+def cmd_call(args):
+    tpl, groups = load_templates(args.templates)
+    counts, n, s = count_sam(args, tpl)
+    genotype(args, tpl, groups, counts, s / n if n else 150, args.out)
+
+
+def cmd_count(args):
+    tpl, _ = load_templates(args.templates)
+    counts, n, s = count_sam(args, tpl)
+    with open(args.out, 'w') as out:
+        out.write(f'#reads_sampled={n}\tbases_sampled={s}\n')
+        out.write('group\t' + '\t'.join(COUNT_COLS) + '\n')
+        for g, c in sorted(counts.items()):
+            out.write(g + '\t' + '\t'.join(map(str, c)) + '\n')
+    print(f'{len(counts)} groups with evidence -> {args.out}', file=sys.stderr)
+
+
+def cmd_genotype(args):
+    tpl, groups = load_templates(args.templates)
+    counts = collections.defaultdict(lambda: [0] * len(COUNT_COLS))
+    n = s = 0
+    for path in args.counts:
+        with open_text(path) as fh:
+            meta = dict(kv.split('=') for kv in fh.readline()[1:].strip().split('\t'))
+            n += int(meta['reads_sampled'])
+            s += int(meta['bases_sampled'])
+            fh.readline()
+            for line in fh:
+                f = line.rstrip('\n').split('\t')
+                c = counts[f[0]]
+                for i, v in enumerate(f[1:]):
+                    c[i] += int(v)
+    genotype(args, tpl, groups, counts, s / n if n else 150, args.out)
 
 
 def main():
@@ -249,19 +300,32 @@ def main():
     t.add_argument('--flank', type=int, default=300, help='flank length on each side [300]')
     t.add_argument('-o', '--out', required=True, help='output prefix')
     t.set_defaults(func=cmd_templates)
-    c = sub.add_parser('call', help='genotype a sample from reads mapped to the templates')
-    c.add_argument('--templates', required=True, help='PREFIX.tsv from templates')
-    c.add_argument('--sam', required=True, help='reads of one sample mapped to PREFIX.fa (SAM, may be gzipped)')
-    c.add_argument('--anchor', type=int, default=30, help='min aligned bp on each side of a junction [30]')
-    c.add_argument('--min-mapq', type=int, default=20, help='min mapping quality [20]')
-    c.add_argument('--max-del', type=int, default=30, help='deletions up to this length do not break a span [30]')
-    c.add_argument('--tol', type=int, default=30, help='max distance of a SINE-sized indel from the junction [30]')
-    c.add_argument('--min-ins', type=int, default=100, help='min insertion length counted as a SINE [100]')
-    c.add_argument('--min-reads', type=int, default=2, help='min junction reads to call a genotype [2]')
-    c.add_argument('--error', type=float, default=0.02, help='per-read error rate in the likelihood [0.02]')
-    c.add_argument('--ploidy', type=int, choices=(1, 2), default=2)
-    c.add_argument('-o', '--out', required=True)
-    c.set_defaults(func=cmd_call)
+    def common(p, sam=True):
+        p.add_argument('--templates', required=True, help='PREFIX.tsv from templates')
+        if sam:
+            p.add_argument('--sam', required=True, help='reads of one sample mapped to PREFIX.fa (SAM, may be gzipped)')
+            p.add_argument('--anchor', type=int, default=30, help='min aligned bp on each side of a junction [30]')
+            p.add_argument('--min-mapq', type=int, default=20, help='min mapping quality [20]')
+            p.add_argument('--max-del', type=int, default=30, help='deletions up to this length do not break a span [30]')
+            p.add_argument('--tol', type=int, default=30, help='max distance of a SINE-sized indel from the junction [30]')
+            p.add_argument('--min-ins', type=int, default=100, help='min insertion length counted as a SINE [100]')
+        else:
+            p.add_argument('--anchor', type=int, default=30, help='as used for counting [30]')
+        p.add_argument('-o', '--out', required=True)
+
+    def gt_opts(p):
+        p.add_argument('--min-reads', type=int, default=2, help='min reads to call a genotype [2]')
+        p.add_argument('--error', type=float, default=0.02, help='per-read error rate in the likelihood [0.02]')
+        p.add_argument('--ploidy', type=int, choices=(1, 2), default=2)
+
+    c = sub.add_parser('call', help='genotype a sample from reads mapped to the templates (count + genotype)')
+    common(c); gt_opts(c); c.set_defaults(func=cmd_call)
+    k = sub.add_parser('count', help='per-group read counts of one SAM (to combine several SAMs of a sample)')
+    common(k); k.set_defaults(func=cmd_count)
+    y = sub.add_parser('genotype', help='genotype a sample from one or more count files')
+    common(y, sam=False); gt_opts(y)
+    y.add_argument('counts', nargs='+', help='count files of one sample')
+    y.set_defaults(func=cmd_genotype)
     args = ap.parse_args()
     args.func(args)
 
