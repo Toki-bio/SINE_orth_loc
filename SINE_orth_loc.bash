@@ -16,6 +16,7 @@ fi
 THREADS=${THREADS:-$(nproc)} # set THREADS to match the scheduler allocation on clusters
 RESCUE=${RESCUE:-1}          # 0: skip the two-flank rescue of unresolved multi-copy clusters
 RESCUE_PY="$(dirname "$(readlink -f "$0")")/rescue_multi.py"
+PYTHON=${PYTHON:-python3}    # Python >= 3.7 (e.g. PYTHON=/usr/local/bin/python3.12 where python3 is older)
 
 for tool in mafft esl-alipid seqkit bedtools samtools sam2bed bwa ComPair.sh; do
     if ! command -v "$tool" > /dev/null 2>&1; then
@@ -23,8 +24,8 @@ for tool in mafft esl-alipid seqkit bedtools samtools sam2bed bwa ComPair.sh; do
     exit 1
     fi
 done
-if [[ "$RESCUE" == 1 ]] && ! { command -v python3 > /dev/null 2>&1 && [ -f "$RESCUE_PY" ]; }; then
-    echo "python3 or $RESCUE_PY not found (needed for the multi-copy rescue; RESCUE=0 skips it)"; exit 1
+if ! { [ -f "$RESCUE_PY" ] && "$PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 7))' 2> /dev/null; }; then
+    echo "$PYTHON is not Python >= 3.7 or $RESCUE_PY is missing: set PYTHON=/path/to/python3.7+"; exit 1
 fi
 # the cluster grouping step uses gawk-only features; with mawk it silently finds no loci
 if ! awk --version 2>/dev/null | grep -q "GNU Awk"; then echo "awk is not GNU awk (gawk): install gawk"; exit 1; fi
@@ -32,6 +33,10 @@ if ! awk --version 2>/dev/null | grep -q "GNU Awk"; then echo "awk is not GNU aw
 seqkit seq -w 0 $3 > SINE.q # linearising SINE sequence
 SINElength=$(seqkit seq -w 0 $3 | awk 'NR==2 {print length}') # calculating SINE length
 SINEname="${3%.*}"
+# the multi stage finds the consensus row in alignments by this name
+if [[ "$(head -n1 "$3" | sed 's/^>//' | awk '{print $1}')" != "$SINEname" ]]; then
+    echo "SINE consensus header must equal the file name without extension (>$SINEname in $3)"; exit 1
+fi
 
 sp1="${1%.*}"
 sp2="${2%.*}"
@@ -388,11 +393,11 @@ mv stat stat_multi_"$sp1"-"$sp2"
 if [[ "$RESCUE" == 1 ]]; then
     echo "rescuing unresolved multi-copy clusters with both flanks"
     touch "$sp1-$sp2"_multi "$sp1-$sp2"_poly
-    python3 "$RESCUE_PY" prepare --clusters "$sp1-$sp2"_multi "$sp1-$sp2"_poly --resolved statpairs \
+    "$PYTHON" "$RESCUE_PY" prepare --clusters "$sp1-$sp2"_multi "$sp1-$sp2"_poly --resolved statpairs \
      --copies "$sp1=$sp1-${SINEname}_uniq.bed" "$sp2=$sp2-${SINEname}_uniq.bed" --genome "$sp1=$1" "$sp2=$2" --out rescue
     [ -s rescue_"$sp1".fa ] && bwa mem -a -t $THREADS $2 rescue_"$sp1".fa > rescue_"$sp1".sam
     [ -s rescue_"$sp2".fa ] && bwa mem -a -t $THREADS $1 rescue_"$sp2".fa > rescue_"$sp2".sam
-    python3 "$RESCUE_PY" resolve --prep rescue --sam "$sp1=rescue_$sp1.sam" "$sp2=rescue_$sp2.sam" \
+    "$PYTHON" "$RESCUE_PY" resolve --prep rescue --sam "$sp1=rescue_$sp1.sam" "$sp2=rescue_$sp2.sam" \
      --genome "$sp1=$1" "$sp2=$2" --sine-length $SINElength --out "$sp1-$sp2"_rescue --report rescue_"$sp1-$sp2".tsv
     awk 'NR%100==1{x="RPART"++i;}{print > x}' "$sp1-$sp2"_rescue
     for i in RPART*; do [ -f "$i" ] || continue
@@ -436,6 +441,6 @@ awk -v sp1=$sp1 -v sp2=$sp2 -F'\t' '
 
 # what became of every cluster: resolved (and how), rejected by ComPair.sh, or left unresolved
 echo "writing clusters_$sp1-$sp2.tsv"
-python3 "$RESCUE_PY" account --double "$sp1-$sp2"_double --multi "$sp1-$sp2"_multi --poly "$sp1-$sp2"_poly \
+"$PYTHON" "$RESCUE_PY" account --double "$sp1-$sp2"_double --multi "$sp1-$sp2"_multi --poly "$sp1-$sp2"_poly \
  --stat stat_doubles_"$sp1"-"$sp2" stat_multi_"$sp1"-"$sp2" stat_rescue_"$sp1"-"$sp2" --statpairs statpairs \
  --rescue-report rescue_"$sp1-$sp2".tsv --out clusters_"$sp1"-"$sp2".tsv

@@ -233,7 +233,7 @@ validate_bed "$BED2" "BED2"
 
 # Check required tools
 echo "Checking required tools..."
-REQUIRED_TOOLS=("mafft" "esl-alipid" "seqkit" "bedtools" "samtools" "bwa" "sam2bed" "gawk" "python3")
+REQUIRED_TOOLS=("mafft" "esl-alipid" "seqkit" "bedtools" "samtools" "bwa" "sam2bed" "gawk" "${PYTHON:-python3}")
 MISSING_TOOLS=()
 
 for tool in "${REQUIRED_TOOLS[@]}"; do
