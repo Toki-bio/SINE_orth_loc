@@ -72,15 +72,21 @@ both loci, their species and whether each carries the SINE (plus the ComPair.sh 
 groups — one per ancestral insertion, with the copy or the empty site in every genome:
 
     sine_registry.py build results_*/results/orth_*.tsv --species lag,dva,pmu,pra \
-        --copies lag=lag-Squam1.bed --copies dva=dva-Squam1.bed ... -o lacertids
+        --copies lag=lag-Squam1.bed --subfamilies lag=lag/assignment_full.tsv \
+        --copies dva=dva-Squam1.bed --subfamilies dva=dva/assignment_full.tsv ... -o lacertids
+
+`--copies` takes the [sear2k](https://github.com/Toki-bio/sear2k) BED of each species and
+family (`<sp>-<FAMILY>.bed`, family from the file name); `--subfamilies` takes the
+[SINEderella](https://github.com/Toki-bio/SINEderella) step-2 `assignment_full.tsv`.
 
 It matches the same locus of a species across comparisons (same chromosome and strand,
 insertion site within `--tol` bp, default 60), joins loci through the orthologous pairs and
 writes
 
-- `lacertids.groups.tsv` — one row per group: family, state pattern, flags, and per species
+- `lacertids.groups.tsv` — one row per group: family, subfamily, state pattern, flags, and per species
   the copy (`chrom:start-end(strand)`) or the empty site (`chrom:pos(strand)`)
-- `lacertids.copies.tsv` — with `--copies`: every annotated copy, its group, or why it has
+- `lacertids.copies.tsv` — with `--copies`: every annotated copy with identity, bitscore and
+  subfamily, its group, or why it has
   none (`close_copy`, `no_validated_pair`, `not_compared`)
 - `lacertids.evidence.tsv` — the pairwise rows behind each group
 - `lacertids.matrix.tsv`, `.patterns.tsv`, `.nex` — states, pattern counts, NEXUS 0/1 matrix

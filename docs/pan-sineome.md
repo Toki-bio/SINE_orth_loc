@@ -11,7 +11,9 @@ files of SINE_orth_loc and, optionally, the BED files of all annotated copies.
 
 ## Concepts
 
-- **Copy**: one annotated SINE copy in one genome (from the copy search, e.g. ssearch36).
+- **Copy**: one annotated SINE copy in one genome (from the copy search with
+  [sear2k](https://github.com/Toki-bio/sear2k)), with its family and, when assigned,
+  its subfamily (from [SINEderella](https://github.com/Toki-bio/SINEderella) step 2).
 - **Site**: the position of an insertion in one genome: the 5' junction between the
   left flank and the SINE, in SINE orientation. For a copy on `+` it is the copy's
   start, for `-` its end. A genome without the SINE has the same site as an empty
@@ -21,6 +23,15 @@ files of SINE_orth_loc and, optionally, the BED files of all annotated copies.
   each and the ComPair.sh metrics.
 - **Group**: the connected set of sites linked by evidence, after merging the sites of
   one genome that lie within `--tol` bp (default 60) on the same chromosome and strand.
+
+## Inputs
+
+| Input | Source | Used for |
+| :- | :- | :- |
+| `orth_<a>-<b>.tsv` | SINE_orth_loc, one per genome pair and SINE family | evidence |
+| `<sp>-<FAMILY>.bed` (`--copies sp=...`, one per species and family) | sear2k: chrom, start, end, % identity, aligned query length, strand, bitscore | copies; family from the file name |
+| any BED6 with the family in the name column (`--copies`) | other annotations | copies |
+| `assignment_full.tsv` (`--subfamilies sp=...`) | SINEderella step 2: Sequence (`chrom:start-end(strand)`), Subfamily, Bitscore, Votes, Status | subfamily of each copy (same coordinates, or ≥50% overlap on the same strand) |
 
 ## Conventions
 
@@ -48,10 +59,11 @@ All tables are tab-separated with one header line. `PREFIX` is the build's outpu
 | :- | :- |
 | group | group ID (see below) |
 | family | most frequent family of the group's copies (`.` without `--copies`) |
+| subfamily | most frequent subfamily among the group's copies with status `assigned` (`.` if none) |
 | pattern | states in species order, e.g. `PPAU` |
 | n_P, n_A, n_U, n_X | number of genomes in each state |
 | pairs | number of evidence rows |
-| flags | comma-separated: `multicopy:<sp>`, `inconsistent:<sp>`, `unannotated:<sp>` (P site without an annotated copy), `family_mixed:<f1>/<f2>`; `.` if none |
+| flags | comma-separated: `multicopy:<sp>`, `inconsistent:<sp>`, `unannotated:<sp>` (P site without an annotated copy), `family_mixed:<f1>/<f2>`, `subfamily_mixed:<s1>/<s2>` (assigned copies of different subfamilies: a lineage-specific subfamily, an assignment error, or a wrong group); `.` if none |
 | one column per species | the copy, or the site (`chrom:pos(strand)`) for A/unannotated P; comma-separated when several; `.` for U |
 
 ### `PREFIX.copies.tsv` (with `--copies`)
@@ -62,7 +74,9 @@ Every annotated copy, whether or not it is in a group.
 | :- | :- |
 | copy | copy ID |
 | species, chrom, start, end, strand | location |
-| family | from the BED name column |
+| family | from the sear2k file name or the BED name column |
+| identity, bitscore | sear2k similarity to the consensus (%) and bitscore (`.` for other BEDs) |
+| subfamily, subfamily_status | SINEderella assignment and its status (`assigned`, `rejected_low_bitscore`, `no_unanimous`); `.` if not assigned |
 | group | group ID, or `.` |
 | status | `grouped`; `close_copy` (another copy within 300 bp, excluded by the pipeline); `no_validated_pair` (compared, but no evidence passed QC); `not_compared` (genome not in any orth table) |
 
@@ -104,7 +118,8 @@ aliases table.
 
 ## Adding a genome
 
-1. Annotate its copies (BED6, name = family).
+1. Find its copies with sear2k (one BED per family) and, optionally, assign subfamilies
+   with SINEderella.
 2. Run SINE_orth_loc against the genomes already included (all of them, or at least one
    close relative and one from each other clade).
 3. `sine_registry.py build <all orth tables> --copies ... --previous <last build> -o <new build>`.
@@ -115,5 +130,4 @@ aliases table.
   all groups, instead of pairwise runs.
 - Verification of empty sites (distance between flanks, no residual SINE sequence).
 - Finer `copies` statuses from the ComPair.sh stat files (`shortRF`, `badLF`, ...).
-- Family assignment confidence (identity and coverage against each consensus).
 - Re-using a previous ID when a group that was merged by mistake is split again.

@@ -183,17 +183,30 @@ def insertion_anchor(chrom, start, end, strand, slop):
     return end - slop if strand == '+' else start + slop
 
 
-def load_copies(specs, close):
-    """Annotated SINE copies per species from BED files (name column = family).
+def is_number(text):
+    try:
+        float(text)
+        return True
+    except ValueError:
+        return False
 
-    Returns {species: [copy, ...]}; a copy is a dict with id, coordinates, family,
-    junction (5' end of the copy in SINE orientation) and close (another copy within
-    `close` bp, which SINE_orth_loc.bash excludes from the comparison)."""
-    copies = {}
+
+def load_copies(specs, close):
+    """Annotated SINE copies per species from BED files; several files per species allowed.
+
+    sear2k output (<sp>-<FAMILY>.bed: name column = % identity, score = aligned query
+    length, column 7 = bitscore) takes the family from the file name; other BED files
+    give the family in the name column. Returns {species: [copy, ...]}; a copy is a dict
+    with id, coordinates, family, identity, bitscore, junction (5' end of the copy in SINE
+    orientation) and close (another copy of the same file within `close` bp, which
+    SINE_orth_loc.bash excludes from the comparison)."""
+    copies = collections.defaultdict(list)
     for spec in specs:
         sp, _, path = spec.partition('=')
         if not path:
             die(f'--copies expects SPECIES=copies.bed, got "{spec}"')
+        base = re.sub(r'\.bed(\.gz)?$', '', os.path.basename(path))
+        file_family = base.split('-', 1)[1] if '-' in base else base
         rows = []
         with open_text(path) as fh:
             for line in fh:
@@ -202,17 +215,60 @@ def load_copies(specs, close):
                 f = line.rstrip('\n').split('\t')
                 if len(f) < 6:
                     die(f'{path}: BED6 needed (chrom start end name score strand)')
-                chrom, s, e, strand = f[0], int(f[1]), int(f[2]), f[5]
-                rows.append({'id': f'{sp}:{chrom}:{s}-{e}({strand})', 'species': sp, 'chrom': chrom,
-                             'start': s, 'end': e, 'strand': strand, 'family': f[3],
-                             'junction': s if strand == '+' else e, 'close': False})
+                chrom, st, en, strand = f[0], int(f[1]), int(f[2]), f[5]
+                sear2k = is_number(f[3])
+                rows.append({'id': f'{sp}:{chrom}:{st}-{en}({strand})', 'species': sp, 'chrom': chrom,
+                             'start': st, 'end': en, 'strand': strand,
+                             'family': file_family if sear2k else f[3],
+                             'identity': f[3] if sear2k else '.',
+                             'bitscore': f[6] if sear2k and len(f) > 6 else '.',
+                             'subfamily': '.', 'subfamily_status': '.',
+                             'junction': st if strand == '+' else en, 'close': False})
         rows.sort(key=lambda c: (c['chrom'], c['start']))
         # same rule as "bedtools cluster -d <close>" followed by keeping singletons
-        for a, b in zip(rows, rows[1:]):
-            if a['chrom'] == b['chrom'] and b['start'] - a['end'] <= close:
-                a['close'] = b['close'] = True
-        copies[sp] = rows
-    return copies
+        for x, y in zip(rows, rows[1:]):
+            if x['chrom'] == y['chrom'] and y['start'] - x['end'] <= close:
+                x['close'] = y['close'] = True
+        copies[sp] += rows
+    return dict(copies)
+
+
+def load_subfamilies(specs, copies):
+    """Attach SINEderella step-2 assignments (assignment_full.tsv: Sequence = chrom:start-end(strand),
+    Subfamily, Bitscore, Votes, Status, ...) to the copies of a species: same coordinates, or
+    else the copy on the same strand that overlaps the sequence by at least half of the shorter."""
+    for spec in specs:
+        sp, _, path = spec.partition('=')
+        if not path or sp not in copies:
+            die(f'--subfamilies expects SPECIES=assignment_full.tsv for a species given with --copies, got "{spec}"')
+        exact = {c['id'].split(':', 1)[1]: c for c in copies[sp]}
+        by_chrom = collections.defaultdict(list)
+        for c in copies[sp]:
+            by_chrom[(c['chrom'], c['strand'])].append(c)
+        matched = total = 0
+        with open_text(path) as fh:
+            header = fh.readline().rstrip('\n').split('\t')
+            for line in fh:
+                r = dict(zip(header, line.rstrip('\n').split('\t')))
+                seq = r.get('Sequence', '').split('|')[0]
+                total += 1
+                c = exact.get(seq)
+                if c is None:
+                    m = LOCUS_RE.match(seq)
+                    if not m:
+                        continue
+                    chrom, st, en, strand = m.group(1), int(m.group(2)), int(m.group(3)), m.group(4)
+                    best = 0
+                    for cand in by_chrom.get((chrom, strand), ()):
+                        ov = min(en, cand['end']) - max(st, cand['start'])
+                        if ov > best and ov >= 0.5 * min(en - st, cand['end'] - cand['start']):
+                            best, c = ov, cand
+                if c is None:
+                    continue
+                matched += 1
+                c['subfamily'] = r.get('Subfamily', '.') or '.'
+                c['subfamily_status'] = r.get('Status', '.') or '.'
+        print(f'{sp}: {matched}/{total} subfamily assignments matched to copies', file=sys.stderr)
 
 
 def parse_site(cell):
@@ -348,6 +404,7 @@ def cmd_build(args):
             edges.append((ids[0], ids[1], os.path.basename(path), r))
 
     copies = load_copies(args.copies or [], args.close)
+    load_subfamilies(args.subfamilies or [], copies)
     species = args.species.split(',') if args.species else sorted(set(species_seen) | set(copies))
     unknown = (set(species_seen) | set(copies)) - set(species)
     if unknown:
@@ -390,6 +447,7 @@ def cmd_build(args):
         for i in members:
             by_species[nodes[i][0]][site.find(i)].append(i)
         states, cells, flags, sites, fams, group_copies = {}, {}, set(), [], collections.Counter(), []
+        subfams = collections.Counter()
         for sp in species:
             sp_sites = by_species.get(sp)
             if not sp_sites:
@@ -406,6 +464,8 @@ def cmd_build(args):
                     parts.append(f"{c['chrom']}:{c['start']}-{c['end']}({c['strand']})")
                     sites.append((sp, chrom, c['junction']))
                     fams[c['family']] += 1
+                    if c['subfamily_status'] == 'assigned':
+                        subfams[c['subfamily']] += 1
                     group_copies.append(c)
                 else:
                     parts.append(f'{chrom}:{anchor}({strand})')
@@ -423,10 +483,13 @@ def cmd_build(args):
                 states[sp] = 'P' if True in seen else 'A'
         if len(fams) > 1:
             flags.add('family_mixed:' + '/'.join(sorted(fams)))
+        if len(subfams) > 1:
+            flags.add('subfamily_mixed:' + '/'.join(sorted(subfams)))
         first = min(members, key=lambda i: (species.index(nodes[i][0]), nodes[i][1], nodes[i][3]))
         groups.append({'key': (species.index(nodes[first][0]), nodes[first][1], nodes[first][3]),
                        'members': members, 'states': states, 'cells': cells, 'flags': sorted(flags),
                        'sites': sites, 'family': fams.most_common(1)[0][0] if fams else '.',
+                       'subfamily': subfams.most_common(1)[0][0] if subfams else '.',
                        'copies': group_copies, 'pairs': sum(1 for i in members) // 2})
     groups.sort(key=lambda g: g['key'])
     ids, aliases = assign_ids(groups, species, args.previous, args.id_prefix, args.tol)
@@ -441,13 +504,13 @@ def cmd_build(args):
     patterns = collections.Counter()
     variable = []
     with open(f'{pre}.groups.tsv', 'w') as gt, open(f'{pre}.matrix.tsv', 'w') as mt:
-        gt.write('\t'.join(['group', 'family', 'pattern', 'n_P', 'n_A', 'n_U', 'n_X', 'pairs', 'flags'] + species) + '\n')
+        gt.write('\t'.join(['group', 'family', 'subfamily', 'pattern', 'n_P', 'n_A', 'n_U', 'n_X', 'pairs', 'flags'] + species) + '\n')
         mt.write('\t'.join(['group'] + species) + '\n')
         for g in groups:
             pat = ''.join(g['states'][sp] for sp in species)
             patterns[pat] += 1
             cnt = collections.Counter(pat)
-            gt.write('\t'.join([g['id'], g['family'], pat, str(cnt['P']), str(cnt['A']), str(cnt['U']),
+            gt.write('\t'.join([g['id'], g['family'], g['subfamily'], pat, str(cnt['P']), str(cnt['A']), str(cnt['U']),
                                 str(cnt['X']), str(g['pairs']), ','.join(g['flags']) or '.']
                                + [g['cells'][sp] for sp in species]) + '\n')
             mt.write('\t'.join([g['id']] + [g['states'][sp] for sp in species]) + '\n')
@@ -487,7 +550,8 @@ def cmd_build(args):
                 copy_group[c['id']] = g['id']
         compared = set(species_seen)
         with open(f'{pre}.copies.tsv', 'w') as ct:
-            ct.write('copy\tspecies\tchrom\tstart\tend\tstrand\tfamily\tgroup\tstatus\n')
+            ct.write('copy\tspecies\tchrom\tstart\tend\tstrand\tfamily\tidentity\tbitscore\t'
+                     'subfamily\tsubfamily_status\tgroup\tstatus\n')
             for sp in species:
                 for c in copies.get(sp, []):
                     if c['id'] in copy_group:
@@ -500,7 +564,8 @@ def cmd_build(args):
                         st = 'no_validated_pair'
                     status[st] += 1
                     ct.write('\t'.join([c['id'], sp, c['chrom'], str(c['start']), str(c['end']), c['strand'],
-                                        c['family'], copy_group.get(c['id'], '.'), st]) + '\n')
+                                        c['family'], c['identity'], c['bitscore'], c['subfamily'],
+                                        c['subfamily_status'], copy_group.get(c['id'], '.'), st]) + '\n')
 
     flagged = sum(1 for g in groups if g['flags'])
     print(f'{len(edges)} locus pairs from {len(tables)} tables'
@@ -527,7 +592,10 @@ def main():
     b.add_argument('-o', '--output', required=True, help='output prefix')
     b.add_argument('--species', help='comma-separated species order for the outputs (default: sorted)')
     b.add_argument('--copies', action='append', metavar='SPECIES=BED',
-                   help='all annotated SINE copies of a species (BED6, name column = family); repeat per species')
+                   help='annotated SINE copies of a species: sear2k <sp>-<FAMILY>.bed (family from the file '
+                        'name) or BED6 with the family in the name column; repeat per species and family')
+    b.add_argument('--subfamilies', action='append', metavar='SPECIES=TSV',
+                   help='SINEderella step-2 assignment_full.tsv of a species; repeat per species')
     b.add_argument('--previous', metavar='PREFIX',
                    help='previous build (PREFIX.groups.tsv, PREFIX.aliases.tsv): keep its group IDs')
     b.add_argument('--id-prefix', default='PSG', help='prefix of new group IDs [PSG]')
