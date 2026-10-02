@@ -125,6 +125,20 @@
   .filter-chip.on-sine  { border-color: var(--sine-color); color: var(--sine-color); background: #7ec8a420; }
   .filter-chip.on-pm    { border-color: var(--pm-color);   color: var(--pm-color);   background: #d98b5b20; }
   .filter-chip.on-mp    { border-color: var(--mp-color);   color: var(--mp-color);   background: #d9c45b20; }
+  .filter-chip.on-rej   { border-color: #a03a3a; color: #a03a3a; background: #f6dede; }
+  #thrPanel { display: none; position: absolute; right: 12px; top: 74px; z-index: 50; width: 330px;
+              background: var(--surface, #fff); border: 1px solid var(--border); border-radius: 6px;
+              box-shadow: 0 6px 24px rgba(0,0,0,.15); padding: 10px 12px; font-size: 12px; }
+  #thrPanel.open { display: block; }
+  #thrPanel h3 { margin: 0 0 6px; font-size: 12px; }
+  #thrPanel table { width: 100%; border-collapse: collapse; }
+  #thrPanel td { padding: 2px 3px; vertical-align: middle; }
+  #thrPanel input[type=number] { width: 58px; font-size: 11px; padding: 1px 3px; }
+  #thrPanel .row-btns { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  #thrSummary { margin-top: 8px; font-size: 11px; line-height: 1.5; color: var(--text-dim); }
+  #thrSummary b { color: var(--text); }
+  #thrEnv { width: 100%; font-family: monospace; font-size: 10px; margin-top: 6px; display: none; }
+  .stat-reason { font-size: 11px; margin-left: 6px; }
 
   #navRow {
     display: flex;
@@ -257,6 +271,8 @@
   .badge-SINE { background: #d0efe3; color: var(--sine-color); }
   .badge-PM   { background: #f5e4cc; color: var(--pm-color); }
   .badge-MP   { background: #f0ecc0; color: var(--mp-color); }
+  .badge-REJ  { background: #f6dede; color: #a03a3a; }
+  .file-badge.changed { outline: 1.5px solid #7a4fc0; }
 
   /* ── CONTENT PANE ── */
   #content {
@@ -508,7 +524,11 @@
     <span class="filter-chip" data-type="SINE" title="Show .SINE files">SINE</span>
     <span class="filter-chip" data-type="PM"   title="Show .PM files">PM</span>
     <span class="filter-chip" data-type="MP"   title="Show .MP files">MP</span>
+    <span class="filter-chip" data-type="REJ"  title="Show alignments rejected by ComPair.sh (rejected bundle or .badLF/.badRF/.shortRF/.lfSINE/.rfSINE files)">rejected</span>
+    <label style="font-size:11px;white-space:nowrap;" title="Only alignments whose class changes under the current thresholds"><input type="checkbox" id="changedOnly"> changed</label>
   </div>
+  <div class="sep"></div>
+  <button class="tb-btn" id="thrBtn" title="ComPair.sh thresholds: change them and see alignments re-classified">⚙ Thresholds</button>
   <div class="sep"></div>
   <div id="viewToggle">
     <button class="tb-btn active" id="btnSingle" title="Single alignment view">Single</button>
@@ -538,6 +558,18 @@
     <button id="navNext" disabled title="Next (→)">›</button>
   </div>
   <span id="fileInfo">No folder loaded</span>
+</div>
+
+<div id="thrPanel">
+  <h3>ComPair.sh thresholds</h3>
+  <table id="thrTable"></table>
+  <div class="row-btns">
+    <button class="tb-btn" id="thrApply" title="Re-classify all loaded alignments">Apply</button>
+    <button class="tb-btn" id="thrReset" title="Published defaults">Defaults</button>
+    <button class="tb-btn" id="thrExport" title="Copy as environment variables for SINE_orth_loc.bash / ComPair.sh">Copy as env</button>
+  </div>
+  <textarea id="thrEnv" rows="3" readonly></textarea>
+  <div id="thrSummary">Load alignments, then Apply.</div>
 </div>
 
 <div id="main">
@@ -578,6 +610,80 @@
 </div>
 
 <script>
+// ── ComPair port (keep in sync with ComPair.sh) ─────────────────────────────
+// Same decisions as ComPair.sh on a 3-row alignment (locus 1, locus 2, SINE consensus last).
+// Identity as esl-alipid: identical residues / residues of the shorter sequence, printed
+// with 2 decimals and truncated to an integer (ComPair reads the integer part).
+const COMPAIR_DEFAULTS = { CP_FLANK_LEN: 150, CP_FLANK_NID: 65, CP_FLANK_PID: 65,
+  CP_SINE_PID: 65, CP_SINE_NID: 100, CP_CUT_PID: 70, CP_CUT_NID: 120 };
+
+function compairPair(a, b, from, to) {           // 1-based inclusive columns, like seqkit subseq -r
+  let nid = 0, l1 = 0, l2 = 0;
+  for (let i = from - 1; i < to && i < a.length; i++) {
+    const x = a[i], y = b[i];
+    const rx = x !== '-' && x !== '.' && x !== '~' && x !== undefined;
+    const ry = y !== '-' && y !== '.' && y !== '~' && y !== undefined;
+    if (rx) l1++;
+    if (ry) l2++;
+    if (rx && ry && x.toUpperCase() === y.toUpperCase()) nid++;
+  }
+  const den = Math.min(l1, l2);
+  const pid = den ? Math.trunc(Number((100 * nid / den).toFixed(2))) : 0;
+  return { pid, nid };
+}
+
+function compair(seqs, T = COMPAIR_DEFAULTS) {
+  if (seqs.length < 3) return { status: 'n/a', reason: 'needs two loci and the SINE consensus' };
+  const s1 = seqs[0].seq, s2 = seqs[1].seq;
+  let cons = seqs[seqs.length - 1].seq;
+  const len = cons.length;
+  const runs = cons.split(/[^-]+/).filter(r => r !== '').map(r => r.length);
+  let LF = runs.length ? runs[0] : 0;
+  const RFlength = runs.length ? runs[runs.length - 1] : 0;
+  const RF = len - RFlength;
+  const m = { LF, RFlength };
+  if (LF <= T.CP_FLANK_LEN) {                     // drop a stray consensus fragment in the left flank
+    cons = cons.replace(/\p{L}[a-zA-Z]*/u, x => '-'.repeat(x.length));
+    const lead = cons.match(/^-*/)[0].length;
+    LF = m.LF = lead;
+  }
+  if (RFlength < T.CP_FLANK_LEN) return { status: 'shortRF', reason: `right flank ${RFlength} < ${T.CP_FLANK_LEN}`, ...m };
+  if (cons[0] !== '-') return { status: 'lfSINE', reason: 'SINE consensus reaches the alignment start', ...m };
+  if (cons[len - 1] !== '-') return { status: 'rfSINE', reason: 'SINE consensus reaches the alignment end', ...m };
+  const fl = compairPair(s1, s2, 1, LF), fr = compairPair(s1, s2, RF + 1, len);
+  const one2 = compairPair(s1, s2, LF + 1, RF), oneS = compairPair(s1, cons, LF + 1, RF), twoS = compairPair(s2, cons, LF + 1, RF);
+  Object.assign(m, { FL: fl.pid, LFcp: fl.nid, FR: fr.pid, RFcp: fr.nid, OneTwo: one2.pid, SL: one2.nid,
+                     OneSINE: oneS.pid, SO: oneS.nid, TwoSINE: twoS.pid, ST: twoS.nid });
+  if (!(m.LFcp > T.CP_FLANK_NID && LF > T.CP_FLANK_LEN && m.FL > T.CP_FLANK_PID)) {
+    const why = m.LFcp <= T.CP_FLANK_NID ? `left flank identical nt ${m.LFcp} ≤ ${T.CP_FLANK_NID}`
+      : LF <= T.CP_FLANK_LEN ? `left flank ${LF} ≤ ${T.CP_FLANK_LEN}` : `left flank identity ${m.FL}% ≤ ${T.CP_FLANK_PID}%`;
+    return { status: 'badLF', reason: why, ...m };
+  }
+  if (m.OneTwo > T.CP_SINE_PID && m.SL > T.CP_SINE_NID && m.SO > T.CP_SINE_NID && m.ST > T.CP_SINE_NID) {
+    if (RFlength > T.CP_FLANK_LEN && m.FR > T.CP_FLANK_PID) return { status: 'SINE', reason: 'SINE in both, flanks good', ...m };
+    return { status: 'badRF', reason: RFlength <= T.CP_FLANK_LEN ? `right flank ${RFlength} ≤ ${T.CP_FLANK_LEN}` : `right flank identity ${m.FR}% ≤ ${T.CP_FLANK_PID}%`, ...m };
+  }
+  // SINE in one genome: compare the right flanks after trimming the overhang of the shorter one
+  const tail = x => x.slice(RF).replace(/-*$/, '').length;
+  const cutRF = Math.min(tail(s1), tail(s2));
+  m.cutRF = cutRF;
+  if (cutRF <= T.CP_FLANK_LEN) return { status: 'shortRF', reason: `trimmed right flank ${cutRF} ≤ ${T.CP_FLANK_LEN}`, ...m };
+  const cut = compairPair(s1.slice(RF), s2.slice(RF), 1, cutRF);
+  m.FRcut = cut.pid; m.FRcp = cut.nid;
+  if (cutRF > T.CP_FLANK_LEN && m.FRcut > T.CP_CUT_PID && m.FRcp > T.CP_CUT_NID)
+    return { status: m.SO > m.ST ? 'PM' : 'MP', reason: 'SINE in one genome, flanks good', ...m };
+  return { status: 'badRF', reason: m.FRcut <= T.CP_CUT_PID ? `trimmed right flank identity ${m.FRcut}% ≤ ${T.CP_CUT_PID}%`
+                                                           : `trimmed right flank identical nt ${m.FRcp} ≤ ${T.CP_CUT_NID}`, ...m };
+}
+// ── end ComPair port ─────────────────────────────────────────────────────────
+
+const ACCEPTED = ['PM', 'MP', 'SINE'];
+const REJECTED = ['badLF', 'badRF', 'shortRF', 'lfSINE', 'rfSINE'];
+const STATUS_TYPES = ACCEPTED.concat(REJECTED);
+const groupOf = t => ACCEPTED.includes(t) ? t : 'REJ';
+const liveOf = f => f.live || f.type;              // status under the current thresholds
+const badgeText = f => (f.live && f.live !== f.type) ? `${f.type}→${f.live}` : f.type;
+
 // ── State ──────────────────────────────────────────────────────────────────
 let allFiles = [];   // {name, type, file} — text NOT pre-loaded; bundle entries carry {text} instead of {file}
 let filtered = [];   // filtered subset
@@ -585,6 +691,7 @@ let currentIdx = 0;
 let viewMode = 'single';
 let activeFilters = new Set();
 let textFilter = '';
+let changedOnly = false;
 let _textCache = new Map(); // name → text, loaded on demand
 
 async function getFileText(f) {
@@ -666,13 +773,12 @@ const NT_COLORS = { A:'nA', T:'nT', G:'nG', C:'nC', U:'nU', '-':'nc', '.':'nc' }
 document.getElementById('folderInput').addEventListener('change', e => {
   const files = Array.from(e.target.files);
   const wanted = files.filter(f => {
-    const ext = f.name.split('.').pop().toUpperCase();
-    return ['PM','MP','SINE'].includes(ext);
+    return STATUS_TYPES.includes(f.name.split('.').pop());
   });
   // Only store metadata — no text reading yet
   setEntries(wanted.map(f => ({
     name: f.name,
-    type: f.name.split('.').pop().toUpperCase(),
+    type: f.name.split('.').pop(),
     file: f
   })), 'files found');
 });
@@ -683,6 +789,8 @@ function setEntries(entries, what) {
   allFiles = entries;
   document.getElementById('fileInfo').textContent = `${allFiles.length} ${what}`;
   applyFilter();
+  // thresholds saved from an earlier session: classify the new alignments with them
+  if (Object.keys(COMPAIR_DEFAULTS).some(k => thresholds[k] !== COMPAIR_DEFAULTS[k])) applyThresholds();
 }
 
 // ── Bundle loading ──────────────────────────────────────────────────────────
@@ -709,8 +817,8 @@ async function readBundle(file, out) {
   let name = null, lines = [];
   const flush = () => {
     if (name === null) return;
-    const type = name.split('.').pop().toUpperCase();
-    if (['PM','MP','SINE'].includes(type)) out.push({ name, type, text: lines.join('\n') + '\n' });
+    const type = name.split('.').pop();
+    if (STATUS_TYPES.includes(type)) out.push({ name, type, text: lines.join('\n') + '\n' });
   };
   for await (const raw of bundleLines(file)) {
     const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
@@ -740,6 +848,58 @@ document.getElementById('bundleInput').addEventListener('change', async e => {
   }
   setEntries(entries, `alignments from ${files.length} bundle${files.length > 1 ? 's' : ''}`);
 });
+
+// ── Thresholds ───────────────────────────────────────────────────────────────
+const THR_LABELS = {
+  CP_FLANK_LEN: 'min flank length (columns)', CP_FLANK_NID: 'min identical nt, left flank',
+  CP_FLANK_PID: 'min % identity, flanks', CP_SINE_PID: 'SINE in both: min % identity of SINEs',
+  CP_SINE_NID: 'SINE in both: min identical nt', CP_CUT_PID: 'SINE in one: min % identity, trimmed right flank',
+  CP_CUT_NID: 'SINE in one: min identical nt, trimmed right flank' };
+let thresholds = { ...COMPAIR_DEFAULTS };
+try { Object.assign(thresholds, JSON.parse(localStorage.getItem('sineThresholds') || '{}')); } catch (e) {}
+
+function renderThrTable() {
+  document.getElementById('thrTable').innerHTML = Object.keys(COMPAIR_DEFAULTS).map(k =>
+    `<tr><td title="${k} (ComPair.sh default ${COMPAIR_DEFAULTS[k]})">${THR_LABELS[k]}</td>` +
+    `<td><input type="number" data-k="${k}" value="${thresholds[k]}"${thresholds[k] !== COMPAIR_DEFAULTS[k] ? ' style="border-color:#7a4fc0"' : ''}></td></tr>`).join('');
+}
+
+async function applyThresholds() {
+  document.querySelectorAll('#thrTable input').forEach(i => { const v = parseInt(i.value); if (!isNaN(v)) thresholds[i.dataset.k] = v; });
+  try { localStorage.setItem('sineThresholds', JSON.stringify(thresholds)); } catch (e) {}
+  renderThrTable();
+  const sum = document.getElementById('thrSummary');
+  const before = {}, after = {};
+  let changed = 0;
+  for (let i = 0; i < allFiles.length; i++) {
+    const f = allFiles[i];
+    if (i % 500 === 0) { sum.textContent = `Classifying ${i}/${allFiles.length}…`; await new Promise(r => setTimeout(r)); }
+    const r = compair(parseFasta(await getFileText(f)), thresholds);
+    f.live = r.status; f.reason = r.reason;
+    const g0 = groupOf(f.type), g1 = groupOf(f.live);
+    before[g0] = (before[g0] || 0) + 1; after[g1] = (after[g1] || 0) + 1;
+    if (f.live !== f.type) changed++;
+  }
+  const row = g => `<tr><td>${g === 'REJ' ? 'rejected' : g}</td><td>${before[g] || 0}</td><td><b>${after[g] || 0}</b></td></tr>`;
+  sum.innerHTML = allFiles.length
+    ? `<table><tr><td></td><td>pipeline</td><td>now</td></tr>${['PM', 'MP', 'SINE', 'REJ'].map(row).join('')}</table>` +
+      `<b>${changed}</b> alignment${changed === 1 ? '' : 's'} change class` +
+      (before.REJ ? '' : '<br>Load the rejected bundle too to see what relaxed thresholds would accept.')
+    : 'Load alignments first.';
+  applyFilter();
+}
+
+renderThrTable();
+document.getElementById('thrBtn').addEventListener('click', () => document.getElementById('thrPanel').classList.toggle('open'));
+document.getElementById('thrApply').addEventListener('click', applyThresholds);
+document.getElementById('thrReset').addEventListener('click', () => { thresholds = { ...COMPAIR_DEFAULTS }; renderThrTable(); applyThresholds(); });
+document.getElementById('thrExport').addEventListener('click', () => {
+  const env = Object.keys(COMPAIR_DEFAULTS).map(k => `${k}=${thresholds[k]}`).join(' ');
+  const box = document.getElementById('thrEnv');
+  box.style.display = 'block'; box.value = env; box.select();
+  navigator.clipboard?.writeText(env).catch(() => {});
+});
+document.getElementById('changedOnly').addEventListener('change', e => { changedOnly = e.target.checked; applyFilter(); });
 
 // ── Block size controls ──────────────────────────────────────────────────────
 (function() {
@@ -784,7 +944,7 @@ document.querySelectorAll('.filter-chip').forEach(chip => {
       chip.className = 'filter-chip';
     } else {
       activeFilters.add(t);
-      chip.className = `filter-chip on-${t.toLowerCase()}`;
+      chip.className = `filter-chip on-${t.toLowerCase()}`;   // on-sine, on-pm, on-mp, on-rej
     }
     applyFilter();
   });
@@ -797,7 +957,8 @@ document.getElementById('filterInput').addEventListener('input', e => {
 
 function applyFilter() {
   filtered = allFiles.filter(f => {
-    if (activeFilters.size && !activeFilters.has(f.type)) return false;
+    if (activeFilters.size && !activeFilters.has(groupOf(liveOf(f)))) return false;
+    if (changedOnly && !(f.live && f.live !== f.type)) return false;
     if (textFilter && !f.name.toLowerCase().includes(textFilter)) return false;
     return true;
   });
@@ -842,8 +1003,9 @@ function renderSidebarViewport() {
     div.className = 'file-item' + (i === currentIdx ? ' selected' : '');
     div.style.height = ITEM_H + 'px';
     const badge = document.createElement('span');
-    badge.className = `file-badge badge-${f.type}`;
-    badge.textContent = f.type;
+    badge.className = `file-badge badge-${groupOf(liveOf(f))}` + (f.live && f.live !== f.type ? ' changed' : '');
+    badge.textContent = badgeText(f);
+    badge.title = f.reason || '';
     const name = document.createElement('span');
     name.textContent = f.name.replace(/\.cl\..*$/, '');
     name.title = f.name;
@@ -968,9 +1130,10 @@ async function showCurrent() {
   const titleName = document.getElementById('titleName');
   titleName.textContent = f.name.replace(/\.cl\..*$/, '');
   const badge = document.getElementById('titleBadge');
-  badge.textContent = f.type;
-  badge.style.background = f.type === 'SINE' ? '#7ec8a430' : f.type === 'PM' ? '#d98b5b30' : '#d9c45b30';
-  badge.style.color = f.type === 'SINE' ? 'var(--sine-color)' : f.type === 'PM' ? 'var(--pm-color)' : 'var(--mp-color)';
+  const g = groupOf(liveOf(f));
+  badge.textContent = badgeText(f);
+  badge.style.background = g === 'SINE' ? '#7ec8a430' : g === 'PM' ? '#d98b5b30' : g === 'MP' ? '#d9c45b30' : '#f6dede';
+  badge.style.color = g === 'SINE' ? 'var(--sine-color)' : g === 'PM' ? 'var(--pm-color)' : g === 'MP' ? 'var(--mp-color)' : '#a03a3a';
 
   // open in MSA viewer link (blob URL)
   // can't auto-load into MSA viewer without server; just copy content
@@ -994,30 +1157,29 @@ async function showCurrent() {
 
 function renderStatLine(seqs, f) {
   const sl = document.getElementById('statLine');
-  if (seqs.length < 2) { sl.innerHTML = ''; return; }
-
+  if (seqs.length < 3) { sl.innerHTML = ''; return; }
   const len = seqs[0]?.seq.length || 0;
-
-  // compute basic stats
-  const s = computeStats(seqs);
-
-  const pill = (label, val, cls) =>
-    `<span class="stat-pill ${cls}" title="${label}">${label}: <b>${val}</b></span>`;
-
-  const flCls  = s.LFcp > 65 ? 'stat-ok' : s.LFcp > 40 ? 'stat-warn' : 'stat-bad';
-  const frCls  = s.RFcp > 65 ? 'stat-ok' : s.RFcp > 40 ? 'stat-warn' : 'stat-bad';
-  const sinCls = s.OneTwo > 65 ? 'stat-ok' : s.OneTwo > 40 ? 'stat-warn' : 'stat-bad';
-  const sosCls = s.SO > 100 ? 'stat-ok' : s.SO > 80 ? 'stat-warn' : 'stat-bad';
-  const stCls  = s.ST > 100 ? 'stat-ok' : s.ST > 80 ? 'stat-warn' : 'stat-bad';
-
+  const r = compair(seqs, thresholds);
+  const T = thresholds;
+  const pill = (label, val, ok, tip) =>
+    val === undefined ? '' : `<span class="stat-pill ${ok === undefined ? '' : ok ? 'stat-ok' : 'stat-bad'}" title="${tip}">${label}: <b>${val}</b></span>`;
+  const both = r.OneTwo > T.CP_SINE_PID && r.SL > T.CP_SINE_NID && r.SO > T.CP_SINE_NID && r.ST > T.CP_SINE_NID;
+  const st = r.status, acc = ACCEPTED.includes(st);
   sl.innerHTML =
     `<span style="color:var(--text-dim);font-size:10px;">len=${len}</span>` +
-    pill('LFcp', s.LFcp, flCls) +
-    pill('RFcp', s.RFcp, frCls) +
-    pill('1↔2', s.OneTwo+'%', sinCls) +
-    pill('SO', s.SO, sosCls) +
-    pill('ST', s.ST, stCls) +
-    (s.sineStart >= 0 ? `<span class="stat-pill" style="color:var(--sine-color);border-color:#7ec8a440">SINE@${s.sineStart}–${s.sineEnd}</span>` : '');
+    pill('LF', r.LF, r.LF > T.CP_FLANK_LEN, `left flank length (> ${T.CP_FLANK_LEN})`) +
+    pill('FL', r.FL === undefined ? undefined : r.FL + '%', r.FL > T.CP_FLANK_PID, `left flank % identity (> ${T.CP_FLANK_PID})`) +
+    pill('LFcp', r.LFcp, r.LFcp > T.CP_FLANK_NID, `left flank identical nt (> ${T.CP_FLANK_NID})`) +
+    pill('RF', r.RFlength, r.RFlength > T.CP_FLANK_LEN, `right flank length (> ${T.CP_FLANK_LEN})`) +
+    pill('FR', r.FR === undefined ? undefined : r.FR + '%', both ? r.FR > T.CP_FLANK_PID : undefined, `right flank % identity (> ${T.CP_FLANK_PID} when SINE in both)`) +
+    pill('1↔2', r.OneTwo === undefined ? undefined : r.OneTwo + '%', undefined, `SINE identity between loci (> ${T.CP_SINE_PID} = SINE in both)`) +
+    pill('SL', r.SL, undefined, `identical nt between the two SINEs (> ${T.CP_SINE_NID} = SINE in both)`) +
+    pill('SO', r.SO, undefined, 'identical nt locus 1 vs consensus') +
+    pill('ST', r.ST, undefined, 'identical nt locus 2 vs consensus') +
+    pill('cutRF', r.cutRF, r.cutRF === undefined ? undefined : r.cutRF > T.CP_FLANK_LEN, `trimmed right flank length (> ${T.CP_FLANK_LEN})`) +
+    pill('FRcut', r.FRcut === undefined ? undefined : r.FRcut + '%', r.FRcut === undefined ? undefined : r.FRcut > T.CP_CUT_PID, `trimmed right flank % identity (> ${T.CP_CUT_PID})`) +
+    pill('FRcp', r.FRcp, r.FRcp === undefined ? undefined : r.FRcp > T.CP_CUT_NID, `trimmed right flank identical nt (> ${T.CP_CUT_NID})`) +
+    `<span class="stat-reason" style="color:${acc ? '#1a6a40' : '#a03a3a'}"><b>${st}</b>${st !== f.type ? ` (pipeline: ${f.type})` : ''} — ${r.reason}</span>`;
 }
 
 function computeStats(seqs) {
@@ -1240,8 +1402,8 @@ function makeCard(i) {
   cname.title = f.name;
   header.appendChild(cname);
   const badge = document.createElement('span');
-  badge.className = `file-badge badge-${f.type}`;
-  badge.textContent = f.type;
+  badge.className = `file-badge badge-${groupOf(liveOf(f))}` + (f.live && f.live !== f.type ? ' changed' : '');
+  badge.textContent = badgeText(f);
   header.appendChild(badge);
   card.appendChild(header);
 

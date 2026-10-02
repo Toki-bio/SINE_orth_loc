@@ -10,6 +10,15 @@
 echo $1
 bank=$1
 STAT=${COMPAIR_STAT:-stat} # per-job stat file when run in parallel (set by SINE_orth_loc.bash)
+
+# thresholds (defaults = published criteria); can be tuned in sine_loci_browser.html and exported
+CP_FLANK_LEN=${CP_FLANK_LEN:-150}   # min length of left/right flank (alignment columns)
+CP_FLANK_NID=${CP_FLANK_NID:-65}    # min identical nt in left flank
+CP_FLANK_PID=${CP_FLANK_PID:-65}    # min % identity of left and right flanks
+CP_SINE_PID=${CP_SINE_PID:-65}      # SINE in both: min % identity between the two SINEs
+CP_SINE_NID=${CP_SINE_NID:-100}     # SINE in both: min identical nt between SINEs and with consensus
+CP_CUT_PID=${CP_CUT_PID:-70}        # SINE in one: min % identity of the trimmed right flank
+CP_CUT_NID=${CP_CUT_NID:-120}       # SINE in one: min identical nt in the trimmed right flank
 seqkit range -r -1:-1 -w 0 $bank | awk -F '[^-]+' 'NR!=1 {for (i=1; i<=NF; i++) if ($i != "") print length($i)}' > $bank.gaps # first and last values are lengths of 3' and 5' rows of consecutive gaps in SINE sequence
 LF=$(awk 'NR==1' $bank.gaps) # right coordinate of the left flank
 RFlength=$(awk 'END {print}' $bank.gaps) # length of the right flank
@@ -19,14 +28,14 @@ echo LF=$LF len=$len RF=$RF RFlength=$RFlength
 rm $bank.gaps
 
 #report problematic flanks length
-if [[ "$LF" -le "150" ]]; then echo "Short FLANK! Trying to fix it"
+if [[ "$LF" -le "$CP_FLANK_LEN" ]]; then echo "Short FLANK! Trying to fix it"
     part=$(seqkit range -r -1:-1 -w 0 $bank | awk 'NR==2' | perl -pe 's/\p{L}([a-zA-Z]*)/"-" x (length($1)+1)/ei')
     awk -v part=$part 'NR<6 {print $0} END {print part}' $bank > $bank.temp
     mv $bank.temp $bank
     LF=$(seqkit range -r -1:-1 -w 0 $bank | awk -F '[^-]+' 'NR!=1 {print length($1)}') # recalculating new left flank coordinate
     echo new left flank $LF
 fi
-if [[ "$RFlength" -lt "150" ]]; then echo "Short FRANK!"; mv $bank $bank.shortRF; status=$(echo "shortRF"); echo $bank $status >> "$STAT"; exit; fi
+if [[ "$RFlength" -lt "$CP_FLANK_LEN" ]]; then echo "Short FRANK!"; mv $bank $bank.shortRF; status=$(echo "shortRF"); echo $bank $status >> "$STAT"; exit; fi
 
 leftSINE=$(seqkit range -r -1:-1 -w 0 $bank | awk '/^[^-]/{if (NR==2) print "0"}')
 if [[ "$leftSINE" == 0 ]]
@@ -75,25 +84,25 @@ ST=$(awk -F. 'NR==8 {print $1}' $bank.stats) # number of identical bp between se
 
 #check if SINE is + or - or bad, check if flank and/or frank is good
 
-if [[ $LFcp -gt 65 && $LF -gt 150 && $FL -gt 65 ]] # check if FLANK is good
+if [[ $LFcp -gt $CP_FLANK_NID && $LF -gt $CP_FLANK_LEN && $FL -gt $CP_FLANK_PID ]] # check if FLANK is good
     then echo left flank good, next check SINE and right flank
-	if [[ $OneTwo -gt 65 && $SL -gt 100 && $SO -gt 100 && $ST -gt 100 ]]
+	if [[ $OneTwo -gt $CP_SINE_PID && $SL -gt $CP_SINE_NID && $SO -gt $CP_SINE_NID && $ST -gt $CP_SINE_NID ]]
 	    then echo SINE in both, next check right flank
-		if [[ $RFlength -gt 150 && $FR -gt 65 ]]
+		if [[ $RFlength -gt $CP_FLANK_LEN && $FR -gt $CP_FLANK_PID ]]
 		    then echo right flank is good, homozygous copy; mv $bank $bank.SINE; status=$(echo "SINE")
 		    else echo right flank bad, next try to fix it?; mv $bank $bank.badRF; status=$(echo "badRF")
 		fi
 	    else echo SINE can be polymorphic, need to check right flank, preparing it first
 		seqkit subseq -r $RFcut:$len -w 0 $bank > $bank.tocut
 		cutRF=$(awk '!/^>/ { sub(/-*$/, ""); print}' $bank.tocut | awk 'NR<3 {print length($0)}' | sort -n | head -n 1)   #delete overhang at the tail of minus sequence
-		    if [[ $cutRF -le 150 ]]
+		    if [[ $cutRF -le $CP_FLANK_LEN ]]
 			then echo Right flank too short; mv $bank $bank.shortRF; status=$(echo "shortRF"); rm $bank.tocut* $bank*.fai $bank.stats
 echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST >> "$STAT"; exit
 		    fi
 		seqkit subseq -r 1:$cutRF -w 0 $bank.tocut | esl-alipid - | awk 'NR==2 {print $3,$4,"FRANKcut"}' >> $bank.stats; rm $bank.tocut*
 		FRcut=$(awk -F. 'NR==9 {print $1}' $bank.stats) # identity in cut franks
 		FRcp=$(awk 'NR==9 {print $2}' $bank.stats) # number of identical nt in cut franks
-		if [[ $cutRF -gt 150 && $FRcut -gt 70 && $FRcp -gt 120 ]]
+		if [[ $cutRF -gt $CP_FLANK_LEN && $FRcut -gt $CP_CUT_PID && $FRcp -gt $CP_CUT_NID ]]
 	    	    then echo right flank is good, heterozygous copy, next find which plus/minus
 			trim_right=$((RF+cutRF))
 			seqkit subseq -r 1:$trim_right -w 0 $bank > $bank.trim

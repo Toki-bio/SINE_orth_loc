@@ -82,6 +82,13 @@ repeated. Names are the same as the former individual files (e.g. `C12R.cl.dbl.P
 
 - `sine_loci_browser.html` → **Open Bundle** opens one or more bundles directly
   (**Open Folder** still works for loose files).
+- **⚙ Thresholds** in the browser re-classifies the loaded alignments with the ComPair.sh
+  rules (an exact JavaScript port) under thresholds you set: counts per class before and
+  after, the changed alignments marked (e.g. `PM→badRF`, filter **changed**), and for each
+  alignment its metrics and the test that decides it. Load the `rejected` bundle as well to
+  see what relaxed thresholds would accept. **Copy as env** gives the setting for the next run:
+  `CP_FLANK_LEN=150 CP_FLANK_NID=65 CP_FLANK_PID=65 CP_SINE_PID=65 CP_SINE_NID=100
+  CP_CUT_PID=70 CP_CUT_NID=120 SINE_orth_loc_flexible.sh ...` (these are the defaults).
 - `aln_bundle.sh list|count|get|extract` lists, prints or restores individual files, e.g.
   `aln_bundle.sh extract -p '^C12R\.' out/ aln_sp1-sp2_*.aln.gz`.
 - `aln_bundle.sh pack [--remove] DIR PREFIX` bundles the loose `.PM/.MP/.SINE` files of
