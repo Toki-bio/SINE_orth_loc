@@ -387,7 +387,10 @@ def cmd_resolve(args):
             name = f'M{written}R'
             seen.append((name, a_q, a_t))
             loci = []
-            for g, (chrom, s, e, strand) in ((genomes[sp], q_win), (genomes[tgt], t_win)):
+            ends = ((sp, q_win), (tgt, t_win))
+            if sp != sp_list[0]:      # genome 1 first: ComPair.sh reads PM/MP and LF/RF in that order
+                ends = ends[::-1]
+            for g, (chrom, s, e, strand) in ((genomes[k], w) for k, w in ends):
                 seq = g.fetch(chrom, s, e)
                 if strand == '-':
                     seq = revcomp(seq)
@@ -481,7 +484,7 @@ def main():
     r.add_argument('--prep', required=True, help='prefix given to prepare')
     r.add_argument('--sam', nargs=2, required=True, metavar='SP=SAM',
                    help='bwa mem -a output of the flanks of species SP mapped to the other genome')
-    r.add_argument('--genome', nargs=2, required=True, metavar='SP=FASTA')
+    r.add_argument('--genome', nargs=2, required=True, metavar='SP=FASTA', help='genome 1 first (pairs are written in this order)')
     r.add_argument('--sine-length', type=int, required=True)
     r.add_argument('--anchors', type=int, default=10,
                    help='best hits of each flank used as anchors to search the other flank next to [10]')
