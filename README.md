@@ -64,27 +64,33 @@ repeated. Names are the same as the former individual files (e.g. `C12R.cl.dbl.P
 - `aln_bundle.sh pack [--remove] DIR PREFIX` bundles the loose `.PM/.MP/.SINE` files of
   runs made with earlier versions.
 
-## Multi-species comparison
+## Multi-species comparison (pan-SINEome)
 
 Each pairwise run also writes `orth_<sp1>-<sp2>.tsv`: one row per validated alignment with
 both loci, their species and whether each carries the SINE (plus the ComPair.sh metrics).
-`sine_registry.py` (Python 3, standard library only) combines the pairs:
+`sine_registry.py` (Python 3, standard library only) combines the pairs into orthologous
+groups — one per ancestral insertion, with the copy or the empty site in every genome:
 
-    sine_registry.py build results_*/results/orth_*.tsv --species aaa,bbb,ccc,ddd -o lacertids
+    sine_registry.py build results_*/results/orth_*.tsv --species lag,dva,pmu,pra \
+        --copies lag=lag-Squam1.bed --copies dva=dva-Squam1.bed ... -o lacertids
 
 It matches the same locus of a species across comparisons (same chromosome and strand,
 insertion site within `--tol` bp, default 60), joins loci through the orthologous pairs and
 writes
 
-- `lacertids.loci.tsv` — one row per multi-species locus: state pattern, flags, coordinates
-- `lacertids.matrix.tsv` — locus × species states
-- `lacertids.patterns.tsv` — number of loci per pattern (e.g. `PPAA`)
-- `lacertids.nex` — NEXUS 0/1 matrix of variable loci for PAUP*/MrBayes
+- `lacertids.groups.tsv` — one row per group: family, state pattern, flags, and per species
+  the copy (`chrom:start-end(strand)`) or the empty site (`chrom:pos(strand)`)
+- `lacertids.copies.tsv` — with `--copies`: every annotated copy, its group, or why it has
+  none (`close_copy`, `no_validated_pair`, `not_compared`)
+- `lacertids.evidence.tsv` — the pairwise rows behind each group
+- `lacertids.matrix.tsv`, `.patterns.tsv`, `.nex` — states, pattern counts, NEXUS 0/1 matrix
+- `lacertids.aliases.tsv` — IDs of the previous build that were merged, split or retired
 
 States: **P** SINE present, **A** empty site with orthologous flanks, **U** no data,
 **X** ambiguous (contradicting calls, flag `inconsistent:<sp>`, or several loci of one
-species joined into one locus, flag `multicopy:<sp>`). A new genome only needs its
-comparisons with the existing ones; rebuild the registry with the added tables.
+species joined into one group, flag `multicopy:<sp>`). To add a genome, run its
+comparisons with the existing ones and rebuild with `--previous <last build>`: groups keep
+their IDs. The format is described in [`docs/pan-sineome.md`](docs/pan-sineome.md).
 
 For runs made before `orth_*.tsv` existed, rebuild the table from the stat files and the
 alignments (a directory of loose files or the bundles):
