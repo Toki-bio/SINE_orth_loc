@@ -29,6 +29,7 @@ Only the Python standard library is used.
 """
 
 import argparse
+import bisect
 import collections
 import glob
 import gzip
@@ -220,7 +221,7 @@ def load_copies(specs, close):
                 rows.append({'id': f'{sp}:{chrom}:{st}-{en}({strand})', 'species': sp, 'chrom': chrom,
                              'start': st, 'end': en, 'strand': strand,
                              'family': file_family if sear2k else f[3],
-                             'identity': f[3] if sear2k else '.',
+                             'identity': f[3] if sear2k and float(f[3]) <= 100 else '.',
                              'bitscore': f[6] if sear2k and len(f) > 6 else '.',
                              'subfamily': '.', 'subfamily_status': '.',
                              'junction': st if strand == '+' else en, 'close': False})
@@ -423,19 +424,44 @@ def cmd_build(args):
     for a, b, _, _ in edges:
         uf.union(a, b)
 
-    # annotated copy at each site that carries the SINE: nearest 5' junction within --tol
-    by_chrom = collections.defaultdict(list)
+    # annotated copy at each site that carries the SINE. A site is usually the copy's 5' end,
+    # but where two assemblies' annotations disagree on the copy's strand the flank lands at
+    # its 3' end, so either end within --tol counts (5' end and same strand preferred).
+    ends = collections.defaultdict(list)            # (species, chrom) -> sorted [(position, n, copy)]
     for sp, rows in copies.items():
-        for c in rows:
-            by_chrom[(sp, c['chrom'])].append(c)
+        for n, c in enumerate(rows):
+            ends[(sp, c['chrom'])].append((c['junction'], n, c))
+            other_end = c['end'] if c['strand'] == '+' else c['start']
+            ends[(sp, c['chrom'])].append((other_end, n, c))
+    for v in ends.values():
+        v.sort(key=lambda x: x[0])
+    ends_pos = {k: [x[0] for x in v] for k, v in ends.items()}
 
     def copy_at(sp, chrom, strand, anchor):
+        v = ends.get((sp, chrom))
+        if not v:
+            return None
+        pos = ends_pos[(sp, chrom)]
         best = None
-        for c in by_chrom.get((sp, chrom), ()):
-            d = abs(c['junction'] - anchor)
-            if d <= args.tol and (best is None or (c['strand'] != strand, d) < best[0]):
-                best = ((c['strand'] != strand, d), c)
+        for i in range(bisect.bisect_left(pos, anchor - args.tol), bisect.bisect_right(pos, anchor + args.tol)):
+            p, _, c = v[i]
+            key = (p != c['junction'], c['strand'] != strand, abs(p - anchor))
+            if best is None or key < best[0]:
+                best = (key, c)
         return best[1] if best else None
+
+    # sites of one species that land on the same copy are one locus
+    node_copy = {}
+    first_node_of_copy = {}
+    for i, (sp, chrom, strand, anchor, _, _) in enumerate(nodes):
+        if calls[i] and sp in copies:
+            c = copy_at(sp, chrom, strand, anchor)
+            if c:
+                node_copy[i] = c
+                j = first_node_of_copy.setdefault(c['id'], i)
+                if j != i:
+                    site.union(i, j)
+                    uf.union(i, j)
 
     comps = collections.defaultdict(list)
     for i in range(len(nodes)):
@@ -459,7 +485,8 @@ def cmd_build(args):
                 chrom, strand = nodes[ids[0]][1], nodes[ids[0]][2]
                 anchor = sorted(nodes[i][3] for i in ids)[len(ids) // 2]
                 has_sine = any(calls[i] for i in ids)
-                c = copy_at(sp, chrom, strand, anchor) if has_sine and copies.get(sp) is not None else None
+                found = collections.Counter(node_copy[i]['id'] for i in ids if i in node_copy)
+                c = next(node_copy[i] for i in ids if i in node_copy and node_copy[i]['id'] == found.most_common(1)[0][0]) if found else None
                 if c:
                     parts.append(f"{c['chrom']}:{c['start']}-{c['end']}({c['strand']})")
                     sites.append((sp, chrom, c['junction']))

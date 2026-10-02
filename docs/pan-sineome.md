@@ -63,7 +63,7 @@ All tables are tab-separated with one header line. `PREFIX` is the build's outpu
 | pattern | states in species order, e.g. `PPAU` |
 | n_P, n_A, n_U, n_X | number of genomes in each state |
 | pairs | number of evidence rows |
-| flags | comma-separated: `multicopy:<sp>`, `inconsistent:<sp>`, `unannotated:<sp>` (P site without an annotated copy), `family_mixed:<f1>/<f2>`, `subfamily_mixed:<s1>/<s2>` (assigned copies of different subfamilies: a lineage-specific subfamily, an assignment error, or a wrong group); `.` if none |
+| flags | comma-separated: `multicopy:<sp>`, `inconsistent:<sp>`, `unannotated:<sp>` (P site without an annotated copy: usually a copy below the annotation's identity/length thresholds but above ComPair.sh's, found through a partner genome's flank), `family_mixed:<f1>/<f2>`, `subfamily_mixed:<s1>/<s2>` (assigned copies of different subfamilies: a lineage-specific subfamily, an assignment error, or a wrong group); `.` if none |
 | one column per species | the copy, or the site (`chrom:pos(strand)`) for A/unannotated P; comma-separated when several; `.` for U |
 
 ### `PREFIX.copies.tsv` (with `--copies`)
