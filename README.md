@@ -46,6 +46,29 @@ On a cluster, set `-t` to the number of allocated cores and `--scratch` to node-
 storage (defaults to `$SLURM_TMPDIR` or `$TMPDIR` when set). Use `--force` to reuse an
 existing output directory from a batch job.
 
+## Multi-copy loci (multimappers)
+
+When a flank matches several places, loci join into clusters of 3–10 (multi) or more
+(poly). The multi stage keeps a cluster only if it reduces to one pair; poly clusters
+were never analysed. Since v2.1, every cluster still unresolved goes through a
+**two-flank rescue** (`rescue_multi.py`): for each SINE copy in it, left and right flanks
+are mapped with `bwa mem -a`, the best hits of each flank serve as anchors, and the other
+flank is aligned in the window next to each anchor where it must lie (same strand, at
+the distance of an empty site or of a SINE). The placement whose two flanks score clearly
+best (`--margin`, default 20) is accepted and checked with ComPair.sh like a double
+(clusters `M<n>R`); ties are reported as ambiguous instead of guessed.
+
+- `clusters_<sp1>-<sp2>.tsv` — every cluster: class, number of loci, fate (resolved and
+  how, rejected by ComPair.sh, unresolved) and the rescue outcome of its copies
+- `rescue_<sp1>-<sp2>.tsv` — per copy: resolved (and the new cluster), ambiguous, no hit
+- `RESCUE=0` (or `--no-rescue` in the wrapper) reproduces the v2.0 behaviour
+
+On a simulated 4-species set where a quarter of the loci have a young repeat (~1%
+divergence) as left flank, plus 10 lineage-specific segmental duplications, the rescue
+raised the recovered repeat-flank loci from 82/113 to 113/113 events in the
+pan-SINEome, with no wrong pairs; the duplicated loci are reported as ambiguous and come
+out as `multicopy` in the registry.
+
 ## Alignment bundles
 
 Clusters are processed in batches of 100 in the scratch directory, and the resulting

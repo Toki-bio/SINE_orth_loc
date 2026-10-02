@@ -35,6 +35,7 @@ OPTIONAL ARGUMENTS:
     -n1, --name1 NAME           Short name for genome1 (default: derived from filename)
     -n2, --name2 NAME           Short name for genome2 (default: derived from filename)
     -k,  --keep-intermediates   Keep all intermediate files (default: cleanup)
+         --no-rescue            Skip the two-flank rescue of unresolved multi-copy clusters
     -f,  --force                Reuse an existing output directory without asking
                                 (required for non-interactive/batch jobs)
     -t,  --threads NUM          Number of threads (default: auto-detect)
@@ -63,6 +64,8 @@ OUTPUT FILES:
     - {output}/results/statbed_{name1}-{name2}.bed     - Coordinates of validated loci
     - {output}/results/statbed_{name2}-{name1}.bed     - Reciprocal coordinates
     - {output}/results/MP_PM_SINE_{name1}-{name2}.txt  - Summary statistics
+    - {output}/results/clusters_{name1}-{name2}.tsv    - Fate of every cluster (double/multi/poly)
+    - {output}/results/rescue_{name1}-{name2}.tsv      - Two-flank rescue outcome per copy
     - {output}/results/orth_{name1}-{name2}.tsv        - One row per validated locus pair
                                                           (input for sine_registry.py)
     - {output}/results/alignments/aln_{name1}-{name2}_{PM,MP,SINE,rejected}.aln.gz
@@ -93,6 +96,7 @@ NAME1=""
 NAME2=""
 KEEP_INTERMEDIATES=false
 FORCE=false
+RESCUE=1
 THREADS=""
 SCRATCH=""
 
@@ -133,6 +137,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -k|--keep-intermediates)
             KEEP_INTERMEDIATES=true
+            shift
+            ;;
+        --no-rescue)
+            RESCUE=0
             shift
             ;;
         -f|--force)
@@ -225,7 +233,7 @@ validate_bed "$BED2" "BED2"
 
 # Check required tools
 echo "Checking required tools..."
-REQUIRED_TOOLS=("mafft" "esl-alipid" "seqkit" "bedtools" "samtools" "bwa" "sam2bed" "gawk")
+REQUIRED_TOOLS=("mafft" "esl-alipid" "seqkit" "bedtools" "samtools" "bwa" "sam2bed" "gawk" "python3")
 MISSING_TOOLS=()
 
 for tool in "${REQUIRED_TOOLS[@]}"; do
@@ -365,6 +373,7 @@ ORIGINAL_DIR=$(pwd)
 if [[ -n "$THREADS" ]]; then
     export THREADS
 fi
+export RESCUE
 if [[ -n "$SCRATCH" ]]; then
     mkdir -p "$SCRATCH" || error_exit "Cannot create scratch directory: $SCRATCH"
     export SCRATCH_DIR=$(readlink -f "$SCRATCH")
@@ -394,6 +403,9 @@ echo "Organizing results..."
 [[ -f "stat_doubles_${NAME1}-${NAME2}" ]] && mv "stat_doubles_${NAME1}-${NAME2}" "$RESULTS_DIR/"
 [[ -f "stat_multi_${NAME1}-${NAME2}" ]] && mv "stat_multi_${NAME1}-${NAME2}" "$RESULTS_DIR/"
 [[ -f "orth_${NAME1}-${NAME2}.tsv" ]] && mv "orth_${NAME1}-${NAME2}.tsv" "$RESULTS_DIR/"
+[[ -f "clusters_${NAME1}-${NAME2}.tsv" ]] && mv "clusters_${NAME1}-${NAME2}.tsv" "$RESULTS_DIR/"
+[[ -f "rescue_${NAME1}-${NAME2}.tsv" ]] && mv "rescue_${NAME1}-${NAME2}.tsv" "$RESULTS_DIR/"
+[[ -f "stat_rescue_${NAME1}-${NAME2}" ]] && mv "stat_rescue_${NAME1}-${NAME2}" "$RESULTS_DIR/"
 
 # Move alignment bundles
 find . -maxdepth 1 -type f -name "aln_*.aln.gz" -exec mv -t "$ALIGNMENTS_DIR/" {} +
@@ -451,6 +463,8 @@ Output Directory Structure:
     │   ├── stat_doubles_${NAME1}-${NAME2}   (Detailed stats - doubles)
     │   ├── stat_multi_${NAME1}-${NAME2}     (Detailed stats - multis)
     │   ├── orth_${NAME1}-${NAME2}.tsv       (Locus pairs for sine_registry.py)
+    │   ├── clusters_${NAME1}-${NAME2}.tsv   (Fate of every cluster)
+    │   ├── rescue_${NAME1}-${NAME2}.tsv     (Two-flank rescue, per copy)
     │   ├── alignments/                      (Alignment bundles, *.aln.gz)
     │   └── summary.txt                      (This file)
     ├── work/                                (Intermediate files)

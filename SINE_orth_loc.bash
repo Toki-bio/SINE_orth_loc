@@ -14,6 +14,8 @@ if [[ $# -eq 0 ]]; then
 fi
 
 THREADS=${THREADS:-$(nproc)} # set THREADS to match the scheduler allocation on clusters
+RESCUE=${RESCUE:-1}          # 0: skip the two-flank rescue of unresolved multi-copy clusters
+RESCUE_PY="$(dirname "$(readlink -f "$0")")/rescue_multi.py"
 
 for tool in mafft esl-alipid seqkit bedtools samtools sam2bed bwa ComPair.sh; do
     if ! command -v "$tool" > /dev/null 2>&1; then
@@ -21,6 +23,9 @@ for tool in mafft esl-alipid seqkit bedtools samtools sam2bed bwa ComPair.sh; do
     exit 1
     fi
 done
+if [[ "$RESCUE" == 1 ]] && ! { command -v python3 > /dev/null 2>&1 && [ -f "$RESCUE_PY" ]; }; then
+    echo "python3 or $RESCUE_PY not found (needed for the multi-copy rescue; RESCUE=0 skips it)"; exit 1
+fi
 # the cluster grouping step uses gawk-only features; with mawk it silently finds no loci
 if ! awk --version 2>/dev/null | grep -q "GNU Awk"; then echo "awk is not GNU awk (gawk): install gawk"; exit 1; fi
 
@@ -374,12 +379,34 @@ done
 
 mv stat stat_multi_"$sp1"-"$sp2"
 
+# Clusters still without a final alignment (3-10 loci the multi stage could not reduce
+# to one pair, and all clusters of more than 10 loci) are usually due to a repetitive
+# left flank. For their SINE copies, map left and right flanks with bwa mem -a and accept
+# a target only where both flanks agree on one placement (rescue_multi.py); accepted
+# pairs are aligned and checked like doubles (clusters M<n>R).
+: > stat
+if [[ "$RESCUE" == 1 ]]; then
+    echo "rescuing unresolved multi-copy clusters with both flanks"
+    touch "$sp1-$sp2"_multi "$sp1-$sp2"_poly
+    python3 "$RESCUE_PY" prepare --clusters "$sp1-$sp2"_multi "$sp1-$sp2"_poly --resolved statpairs \
+     --copies "$sp1=$sp1-${SINEname}_uniq.bed" "$sp2=$sp2-${SINEname}_uniq.bed" --genome "$sp1=$1" "$sp2=$2" --out rescue
+    [ -s rescue_"$sp1".fa ] && bwa mem -a -t $THREADS $2 rescue_"$sp1".fa > rescue_"$sp1".sam
+    [ -s rescue_"$sp2".fa ] && bwa mem -a -t $THREADS $1 rescue_"$sp2".fa > rescue_"$sp2".sam
+    python3 "$RESCUE_PY" resolve --prep rescue --sam "$sp1=rescue_$sp1.sam" "$sp2=rescue_$sp2.sam" \
+     --genome "$sp1=$1" "$sp2=$2" --sine-length $SINElength --out "$sp1-$sp2"_rescue --report rescue_"$sp1-$sp2".tsv
+    awk 'NR%100==1{x="RPART"++i;}{print > x}' "$sp1-$sp2"_rescue
+    for i in RPART*; do [ -f "$i" ] || continue
+        run_batch "$i" align_doubles
+    done
+fi
+mv stat stat_rescue_"$sp1"-"$sp2"
+
 echo compressing alignment bundles
 for t in PM MP SINE rejected; do gzip -f "${BUNDLE}_$t.aln"; done
 
 echo "gathering statistics"
 
-awk -F"./" '{print $2}' stat_multi_"$sp1"-"$sp2" stat_doubles_"$sp1"-"$sp2" | awk '{if ($2=="PM" || $2=="MP" || $2=="SINE") print}' | awk -F. '{print $1,$0}' > statdata
+awk -F"./" '{print $2}' stat_multi_"$sp1"-"$sp2" stat_doubles_"$sp1"-"$sp2" stat_rescue_"$sp1"-"$sp2" | awk '{if ($2=="PM" || $2=="MP" || $2=="SINE") print}' | awk -F. '{print $1,$0}' > statdata
 
 touch statcoords statpairs
 
@@ -399,10 +426,16 @@ awk '{if (NF>3) print $3}' statcomb | sort | uniq -c > MP_PM_SINE_"$sp1"-"$sp2".
 echo "writing orth_$sp1-$sp2.tsv"
 awk -v sp1=$sp1 -v sp2=$sp2 -F'\t' '
  FILENAME==ARGV[1] {g1[$1]; next}
- FILENAME==ARGV[2] || FILENAME==ARGV[3] {split($0,f," "); b=f[1]; sub(/^\.\//,"",b); m=""
+ FILENAME ~ /(^|\/)stat_/ {split($0,f," "); b=f[1]; sub(/^\.\//,"",b); m=""
      for (i=3;i<=length(f);i++) m=m"\t"substr(f[i],index(f[i],"=")+1); met[b"."f[2]]=m; next}
  ($1 in met) {st=$1; sub(/.*\./,"",st); cl=$1; sub(/\..*/,"",cl)
      c1=$2; sub(/:[0-9]+-[0-9]+\([+-]\)$/,"",c1); c2=$3; sub(/:[0-9]+-[0-9]+\([+-]\)$/,"",c2)
      print $1,cl,st,((c1 in g1)?sp1:sp2),$2,((st=="PM"||st=="SINE")?1:0),((c2 in g1)?sp1:sp2),$3,((st=="MP"||st=="SINE")?1:0) met[$1]}
  BEGIN {OFS="\t"; print "alignment","cluster","status","species1","locus1","sine1","species2","locus2","sine2","LF","FL","LFcp","RFlength","FR","RFcp","OneTwo","OneSINE","TwoSINE","SL","SO","ST"}' \
- "$1.fai" stat_doubles_"$sp1"-"$sp2" stat_multi_"$sp1"-"$sp2" statpairs > orth_"$sp1"-"$sp2".tsv
+ "$1.fai" stat_doubles_"$sp1"-"$sp2" stat_multi_"$sp1"-"$sp2" stat_rescue_"$sp1"-"$sp2" statpairs > orth_"$sp1"-"$sp2".tsv
+
+# what became of every cluster: resolved (and how), rejected by ComPair.sh, or left unresolved
+echo "writing clusters_$sp1-$sp2.tsv"
+python3 "$RESCUE_PY" account --double "$sp1-$sp2"_double --multi "$sp1-$sp2"_multi --poly "$sp1-$sp2"_poly \
+ --stat stat_doubles_"$sp1"-"$sp2" stat_multi_"$sp1"-"$sp2" stat_rescue_"$sp1"-"$sp2" --statpairs statpairs \
+ --rescue-report rescue_"$sp1-$sp2".tsv --out clusters_"$sp1"-"$sp2".tsv
