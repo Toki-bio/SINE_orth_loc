@@ -244,6 +244,7 @@ trap 'rm -rf "$SCRATCH"' EXIT
 BUNDLE="$WD/aln_${sp1}-${sp2}"
 for t in PM MP SINE rejected; do rm -f "${BUNDLE}_$t.aln.gz"; echo "##SINE_orth_loc bundle v1" > "${BUNDLE}_$t.aln"; done
 rm -f statcoords statpairs
+cut -f1 "$1.fai" > "$WD/$sp1.chroms"
 
 # each parallel ComPair.sh job writes its own *.stat file; merge them into "stat"
 # serially so concurrent appends cannot interleave (unsafe on NFS/Lustre)
@@ -309,9 +310,13 @@ align_multies() {
      seqkit seq -w 0 > '%.mul'; rm '%'"
 
     echo finding best pair of sequences in each cluster
+    # species of a sequence = genome its chromosome belongs to (chromosome names of the two
+    # genomes need not differ in their first characters, e.g. GenBank accessions)
 
     find . -type f -name "*.mul" -exec sh -c "esl-alipid {} |
-     awk -v sp1=$sp1 -v sp2=$sp2 -v SINEname=$SINEname 'NR>1 (sp1=substr(\$1,1,3)) (sp2=substr(\$2,1,3)) {if (sp1!=sp2 && \$0 !~SINEname) print}' |
+     awk -v g1=\"$WD/$sp1.chroms\" -v SINEname=$SINEname 'BEGIN {while ((getline c < g1) > 0) in1[c]}
+      function sp(n) {sub(/::.*/, \"\", n); sub(/:[^:]*\$/, \"\", n); return (n in in1) ? 1 : 2}
+      NR>1 && \$0 !~ SINEname && sp(\$1) != sp(\$2)' |
      LC_ALL=C sort -r -k 3 -g |
      awk  -v SINEname=$SINEname 'NR==1 {  print \$1,\$2,SINEname,"\n" }' | sed 's/\s\+/\n/g' >  '{}.list'
      seqkit grep -f '{}.list' '{}' > '{}.doub'; rm '{}.list'" \;
@@ -384,17 +389,17 @@ done
 
 mv stat stat_multi_"$sp1"-"$sp2"
 
-# Clusters still without a final alignment (3-10 loci the multi stage could not reduce
-# to one pair, and all clusters of more than 10 loci) are usually due to a repetitive
-# left flank. For their SINE copies, map left and right flanks with bwa mem -a and accept
-# a target only where both flanks agree on one placement (rescue_multi.py); accepted
-# pairs are aligned and checked like doubles (clusters M<n>R).
+# Multi-copy clusters (3-10 loci, of which the multi stage keeps at most one pair, and
+# clusters of more than 10 loci) are usually due to a repetitive left flank. For every SINE
+# copy in them that is not yet in a final alignment, map left and right flanks with
+# bwa mem -a and accept a target only where both flanks agree on one placement
+# (rescue_multi.py); accepted pairs are aligned and checked like doubles (clusters M<n>R).
 : > stat
 if [[ "$RESCUE" == 1 ]]; then
     echo "rescuing unresolved multi-copy clusters with both flanks"
     touch "$sp1-$sp2"_multi "$sp1-$sp2"_poly
     "$PYTHON" "$RESCUE_PY" prepare --clusters "$sp1-$sp2"_multi "$sp1-$sp2"_poly --resolved statpairs \
-     --copies "$sp1=$sp1-${SINEname}_uniq.bed" "$sp2=$sp2-${SINEname}_uniq.bed" --genome "$sp1=$1" "$sp2=$2" --out rescue
+     --copies "$sp1=$sp1-${SINEname}_uniq.bed" "$sp2=$sp2-${SINEname}_uniq.bed" --genome "$sp1=$1" "$sp2=$2" --sine-length $SINElength --out rescue
     [ -s rescue_"$sp1".fa ] && bwa mem -a -t $THREADS $2 rescue_"$sp1".fa > rescue_"$sp1".sam
     [ -s rescue_"$sp2".fa ] && bwa mem -a -t $THREADS $1 rescue_"$sp2".fa > rescue_"$sp2".sam
     "$PYTHON" "$RESCUE_PY" resolve --prep rescue --sam "$sp1=rescue_$sp1.sam" "$sp2=rescue_$sp2.sam" \

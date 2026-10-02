@@ -6,7 +6,7 @@ of more than 10 loci, are usually caused by a repetitive left flank: the left fl
 a SINE copy matches several places in the other genome. The right flank is often unique.
 
   prepare  For every annotated copy (the *_uniq.bed copies the run started from) that lies
-           in an unresolved cluster, write its left and right 300-bp flanks (SINE
+           in a multi-copy cluster and is not yet part of a final alignment, write its left and right 300-bp flanks (SINE
            orientation) as FASTA, one file per genome, to be mapped with bwa mem -a.
   resolve  From the SAM files, take the best hits of each flank as anchors and align the
            other flank in the window next to each anchor where it must lie (mate rescue:
@@ -125,11 +125,22 @@ def cmd_prepare(args):
     copies = kv(args.copies, '--copies')
     if len(genomes) != 2 or set(genomes) != set(copies):
         die('give --genome and --copies for the same two species')
-    done = resolved_clusters(args.resolved)
     clusters = {}
     for path in args.clusters:
         clusters.update(read_clusters(path))
-    open_clusters = {c: loci for c, loci in clusters.items() if c not in done}
+    # loci already in a final alignment (e.g. the pair the multi stage kept from a cluster):
+    # their copies are not rescued again; every other copy of a multi-copy cluster is
+    slop = args.sine_length + FLANK
+    final = collections.defaultdict(list)             # chrom -> 5' junctions of final loci
+    if args.resolved and os.path.exists(args.resolved):
+        with open(args.resolved) as fh:
+            for line in fh:
+                for locus in line.rstrip('\n').split('\t')[1:3]:
+                    m = re.match(r'^(.*):(\d+)-(\d+)\(([+-])\)$', locus)
+                    if m:
+                        s_, e_ = int(m.group(2)), int(m.group(3))
+                        final[m.group(1)].append(e_ - slop if m.group(4) == '+' else s_ + slop)
+    open_clusters = clusters
 
     windows = collections.defaultdict(list)          # chrom -> [(start, end, cluster)]
     for cl, loci in open_clusters.items():
@@ -141,7 +152,10 @@ def cmd_prepare(args):
     selected = collections.defaultdict(list)          # species -> [(copy, cluster)]
     for sp, path in copies.items():
         for c in read_bed(path, sp):
-            _, chrom, s, e, _ = c
+            _, chrom, s, e, strand = c
+            junction = s if strand == '+' else e
+            if any(abs(j - junction) <= 60 for j in final.get(chrom, ())):
+                continue
             for ws, we, cl in windows.get(chrom, ()):
                 if ws >= e:
                     break
@@ -166,7 +180,7 @@ def cmd_prepare(args):
                         fa.write(f'>{cid}|R\n{right}\n')
                     tsv.write(f'{cid}\t{cl}\n')
     n = sum(len(v) for v in selected.values())
-    print(f'{len(open_clusters)} unresolved clusters, {n} copies to rescue', file=sys.stderr)
+    print(f'{len(open_clusters)} multi-copy clusters, {n} copies without a final alignment to rescue', file=sys.stderr)
 
 
 # ── resolve ────────────────────────────────────────────────────────────────────
@@ -456,7 +470,8 @@ def main():
 
     p = sub.add_parser('prepare')
     p.add_argument('--clusters', nargs='+', required=True, help='<sp1>-<sp2>_multi and _poly cluster files')
-    p.add_argument('--resolved', help='statpairs of the run (clusters that already have a final alignment)')
+    p.add_argument('--resolved', help='statpairs of the run (loci that already have a final alignment)')
+    p.add_argument('--sine-length', type=int, required=True)
     p.add_argument('--copies', nargs=2, required=True, metavar='SP=BED', help='the *_uniq.bed copies of both species')
     p.add_argument('--genome', nargs=2, required=True, metavar='SP=FASTA', help='both genomes (with .fai)')
     p.add_argument('--out', required=True, help='output prefix')

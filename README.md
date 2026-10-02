@@ -49,9 +49,9 @@ existing output directory from a batch job.
 ## Multi-copy loci (multimappers)
 
 When a flank matches several places, loci join into clusters of 3–10 (multi) or more
-(poly). The multi stage keeps a cluster only if it reduces to one pair; poly clusters
-were never analysed. Since v2.1, every cluster still unresolved goes through a
-**two-flank rescue** (`rescue_multi.py`): for each SINE copy in it, left and right flanks
+(poly). The multi stage keeps at most one pair per cluster; poly clusters were never
+analysed. Since v2.1, every copy of a multi-copy cluster that is not yet in a final
+alignment goes through a **two-flank rescue** (`rescue_multi.py`): left and right flanks
 are mapped with `bwa mem -a`, the best hits of each flank serve as anchors, and the other
 flank is aligned in the window next to each anchor where it must lie (same strand, at
 the distance of an empty site or of a SINE). The placement whose two flanks score clearly
@@ -64,10 +64,16 @@ best (`--margin`, default 20) is accepted and checked with ComPair.sh like a dou
 - `RESCUE=0` (or `--no-rescue` in the wrapper) reproduces the v2.0 behaviour
 
 On a simulated 4-species set where a quarter of the loci have a young repeat (~1%
-divergence) as left flank, plus 10 lineage-specific segmental duplications, the rescue
-raised the recovered repeat-flank loci from 82/113 to 113/113 events in the
-pan-SINEome, with no wrong pairs; the duplicated loci are reported as ambiguous and come
-out as `multicopy` in the registry.
+divergence) as left flank, plus 10 lineage-specific segmental duplications
+(`tests/`), recall per pair rose from 207–283 to 257–324 of 258–324 loci (repeat-flank
+loci: from 17–40 to 63–81 of 64–81), with no wrong pairs; the duplicated loci are
+reported as ambiguous and come out as `multicopy` in the registry.
+
+The multi stage used to tell the two species apart by the first 3 characters of the
+sequence names, which works only for genomes renamed with species prefixes (`dva_chr1`).
+With GenBank-style names (`CM0…`, `JAW…`) every candidate pair looked like one species
+and all multi clusters were dropped silently (empty `stat_multi_*`). It now uses the
+chromosome list of genome 1.
 
 ## Alignment bundles
 
