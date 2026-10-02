@@ -134,6 +134,33 @@ species joined into one group, flag `multicopy:<sp>`). To add a genome, run its
 comparisons with the existing ones and rebuild with `--previous <last build>`: groups keep
 their IDs. The format is described in [`docs/pan-sineome.md`](docs/pan-sineome.md).
 
+## Genotyping pan-SINEome loci from reads (prototype)
+
+`sine_genotype.py` genotypes the orthologous groups of a pan-SINEome in any sequenced
+individual, without assembling it: two templates per group (the allele with the SINE and
+the empty allele, from the assembled genomes), reads mapped to them, and per read the allele
+it shows (a junction crossed with ≥30 bp on both sides, or the SINE missing from / inserted
+into a template); repetitive junctions are not used. Output: 0/0, 0/1, 1/1 with read counts
+and a genotype quality (GQ).
+
+    sine_genotype.py templates --groups lacertids.groups.tsv --genome lag=lag.fa dva=dva.fa ... -o tpl
+    bwa index tpl.fa && bwa mem -t 16 tpl.fa sample.fq > sample.sam          # HiFi: minimap2 -ax map-hifi
+    sine_genotype.py call --templates tpl.tsv --sam sample.sam -o sample.gt.tsv
+
+Simulation (`tests/`: pan-SINEome of 3 species; individuals with 0.5% private mutations),
+% correct of called loci (calls / 389 groups):
+
+| individual | short 5× | short 10× | short 20× | HiFi 10× |
+| :- | :- | :- | :- | :- |
+| new individual of a species in the pan-SINEome | 100 (336) | 100 (380) | 100 (389) | 100 (386) |
+| individual of a species **not** in the pan-SINEome | 100 (323) | 100 (381) | 100 (386) | 99.7 (383) |
+| hybrid of two species (heterozygous loci) | 83 (353) | 93 (388) | 98 (387) | 97 (387) |
+| hybrid, only GQ ≥ 20 | 100 (51) | 100 (231) | 100 (351) | 99.7 (314) |
+
+Heterozygous loci need depth: at 10× each haplotype gives ~3 junction reads and the empty
+allele is sometimes missed by chance; such calls get a low GQ. For hybrid parthenogens use
+≥20× short reads or HiFi, and filter on GQ.
+
 For runs made before `orth_*.tsv` existed, rebuild the table from the stat files and the
 alignments (a directory of loose files or the bundles):
 

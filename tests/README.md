@@ -13,3 +13,16 @@
 different insertions (wrong), a duplicated copy paired with its counterpart (paralog),
 and recall overall and for loci with a repetitive left flank. Run with `RESCUE=0` to
 compare with the behaviour without the two-flank rescue.
+
+## Genotyping from reads
+
+    python3 ../sine_registry.py build run_aaa-bbb/orth_aaa-bbb.tsv run_aaa-ccc/orth_aaa-ccc.tsv \
+        run_bbb-ccc/orth_bbb-ccc.tsv --species aaa,bbb,ccc \
+        --copies aaa=aaa-SINEX.bed --copies bbb=bbb-SINEX.bed --copies ccc=ccc-SINEX.bed -o pan3
+    samtools faidx aaa.bnk; samtools faidx bbb.bnk; samtools faidx ccc.bnk
+    python3 ../sine_genotype.py templates --groups pan3.groups.tsv \
+        --genome aaa=aaa.bnk bbb=bbb.bnk ccc=ccc.bnk -o tpl && bwa index tpl.fa
+    python3 ../tests/simulate_reads.py --hap aaa.bnk --hap ccc.bnk --cov 20 --type short -o hyb.fq
+    bwa mem tpl.fa hyb.fq > hyb.sam
+    python3 ../sine_genotype.py call --templates tpl.tsv --sam hyb.sam -o hyb.gt.tsv
+    python3 ../tests/score_genotypes.py --min-gq=20 . pan3.groups.tsv hyb.gt.tsv aaa ccc
