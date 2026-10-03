@@ -13,6 +13,11 @@
            PREFIX.evidence.tsv  the pairwise rows each group was built from
            PREFIX.aliases.tsv   group IDs of the previous build that were merged, split or retired
            PREFIX.copies.tsv    with --copies: every annotated copy, its group or why it has none
+           PREFIX.edges.tsv     anchor graph: groups whose sites are neighbours along a genome,
+                                with the spacer per species
+           PREFIX.breakpoints.tsv  adjacencies of one genome broken in another; a_specific =
+                                kept by no other genome (misjoin or lineage rearrangement)
+           PREFIX.dupblocks.tsv runs of multicopy sites (duplicated or twice-assembled regions)
          States: P = SINE present, A = empty site (orthologous flanks, no SINE),
                  U = no data (no validated call for this species),
                  X = ambiguous (contradicting calls, or several loci of the species
@@ -330,9 +335,14 @@ def assign_ids(groups, species, previous, prefix, tol):
         for sp, chrom, j in g['sites']:
             lst = old_sites.get((sp, chrom), [])
             i = bisect.bisect_left(lst, (j - tol, ''))
+            near = []
             while i < len(lst) and lst[i][0] <= j + tol:
-                c[lst[i][1]] += 1
+                near.append((abs(lst[i][0] - j), lst[i][1]))
                 i += 1
+            if near:          # only the nearest old site(s): neighbouring loci within --tol stay apart
+                d = min(near)[0]
+                for oid in {oid for dist, oid in near if dist == d}:
+                    c[oid] += 1
         shared.append(c)
 
     winner = {}                                   # old id -> new group index
@@ -473,6 +483,7 @@ def cmd_build(args):
         for i in members:
             by_species[nodes[i][0]][site.find(i)].append(i)
         states, cells, flags, sites, fams, group_copies = {}, {}, set(), [], collections.Counter(), []
+        loci = []                                   # (species, chrom, position, P|A) of every site
         subfams = collections.Counter()
         for sp in species:
             sp_sites = by_species.get(sp)
@@ -490,6 +501,7 @@ def cmd_build(args):
                 if c:
                     parts.append(f"{c['chrom']}:{c['start']}-{c['end']}({c['strand']})")
                     sites.append((sp, chrom, c['junction']))
+                    loci.append((sp, chrom, c['junction'], 'P'))
                     fams[c['family']] += 1
                     if c['subfamily_status'] == 'assigned':
                         subfams[c['subfamily']] += 1
@@ -497,6 +509,7 @@ def cmd_build(args):
                 else:
                     parts.append(f'{chrom}:{anchor}({strand})')
                     sites.append((sp, chrom, anchor))
+                    loci.append((sp, chrom, anchor, 'P' if has_sine else 'A'))
                     if has_sine and sp in copies:
                         flags.add(f'unannotated:{sp}')
             cells[sp] = ','.join(sorted(parts))
@@ -515,7 +528,7 @@ def cmd_build(args):
         first = min(members, key=lambda i: (species.index(nodes[i][0]), nodes[i][1], nodes[i][3]))
         groups.append({'key': (species.index(nodes[first][0]), nodes[first][1], nodes[first][3]),
                        'members': members, 'states': states, 'cells': cells, 'flags': sorted(flags),
-                       'sites': sites, 'family': fams.most_common(1)[0][0] if fams else '.',
+                       'sites': sites, 'loci': loci, 'family': fams.most_common(1)[0][0] if fams else '.',
                        'subfamily': subfams.most_common(1)[0][0] if subfams else '.',
                        'copies': group_copies, 'pairs': sum(1 for i in members) // 2})
     groups.sort(key=lambda g: g['key'])
@@ -569,6 +582,8 @@ def cmd_build(args):
         for row in aliases:
             at.write('\t'.join(row) + '\n')
 
+    write_graph(pre, groups, species, args.max_spacer, args.min_dup_run)
+
     status = collections.Counter()
     if copies:
         copy_group = {}
@@ -604,10 +619,124 @@ def cmd_build(args):
         ev = collections.Counter(a[2] for a in aliases)
         print('IDs vs previous build: ' + ', '.join(f'{k} {v}' for k, v in sorted(ev.items())), file=sys.stderr)
     print(f'-> {pre}.groups.tsv .matrix.tsv .patterns.tsv .nex .evidence.tsv .aliases.tsv'
+          ' .edges.tsv .breakpoints.tsv .dupblocks.tsv'
           + (' .copies.tsv' if copies else ''), file=sys.stderr)
     print('top patterns (' + ''.join(s[0] for s in species) + ' = ' + ','.join(species) + '):', file=sys.stderr)
     for pat, n in patterns.most_common(args.top):
         print(f'  {pat}\t{n}', file=sys.stderr)
+
+
+def write_graph(pre, groups, species, max_spacer, min_dup_run):
+    """The anchor graph: groups are nodes, neighbouring sites along each genome are edges.
+
+    PREFIX.edges.tsv        one row per pair of groups whose sites are neighbours in at least one
+                            genome; per species the spacer (bp between the two sites) or '.'
+    PREFIX.breakpoints.tsv  for each ordered species pair (a, b): neighbours in a, among groups with a
+                            single site in both, that are not neighbours in b (other chromosome or
+                            moved); a_specific = no other informative species keeps the adjacency
+                            (a misjoin of assembly a, or a rearrangement on its lineage)
+    PREFIX.dupblocks.tsv    runs of consecutive sites of multicopy groups in one genome: duplicated
+                            regions, or haplotypes assembled twice
+    """
+    track = {}                                    # species -> chrom -> sorted [(pos, group, state)]
+    count = {sp: collections.Counter() for sp in species}
+    for g in groups:
+        for sp, chrom, pos, state in g['loci']:
+            track.setdefault(sp, collections.defaultdict(list))[chrom].append((pos, g['id'], state))
+            count[sp][g['id']] += 1
+    for chroms in track.values():
+        for v in chroms.values():
+            v.sort()
+
+    edges = {}                                    # (g1, g2) -> {species: spacer}
+    for sp, chroms in track.items():
+        for v in chroms.values():
+            for (p1, g1, _), (p2, g2, _) in zip(v, v[1:]):
+                if g1 == g2 or (max_spacer and p2 - p1 > max_spacer):
+                    continue
+                key = (g1, g2) if g1 < g2 else (g2, g1)
+                edges.setdefault(key, {})[sp] = p2 - p1
+    with open(f'{pre}.edges.tsv', 'w') as fh:
+        fh.write('\t'.join(['group1', 'group2', 'n_species'] + species) + '\n')
+        for (g1, g2), sp_len in sorted(edges.items()):
+            fh.write('\t'.join([g1, g2, str(len(sp_len))] + [str(sp_len.get(sp, '.')) for sp in species]) + '\n')
+
+    single = {sp: {gid for gid, n in count[sp].items() if n == 1} for sp in species}
+    loc = {sp: {gid: (chrom, pos) for chrom, v in track.get(sp, {}).items() for pos, gid, _ in v} for sp in species}
+
+    def order(sp, keep):
+        """per chromosome, the groups in keep in coordinate order; and group -> (chrom, rank)"""
+        rank, runs = {}, []
+        for chrom, v in track.get(sp, {}).items():
+            run = [gid for _, gid, _ in v if gid in keep]
+            runs.append((chrom, run))
+            for k, gid in enumerate(run):
+                rank[gid] = (chrom, k)
+        return runs, rank
+
+    calls = collections.defaultdict(dict)         # (a, g1, g2) -> {b: conserved?}
+    rows = []
+    summary = []
+    for a in species:
+        for b in species:
+            if a == b:
+                continue
+            shared = single[a] & single[b]
+            runs_a, _ = order(a, shared)
+            _, rank_b = order(b, shared)
+            n = kept = 0
+            for chrom, run in runs_a:
+                for g1, g2 in zip(run, run[1:]):
+                    n += 1
+                    (c1, k1), (c2, k2) = rank_b[g1], rank_b[g2]
+                    ok = c1 == c2 and abs(k1 - k2) == 1
+                    calls[(a, g1, g2)][b] = ok
+                    if ok:
+                        kept += 1
+                    else:
+                        rows.append([a, b, g1, g2, chrom, loc[a][g1][1], loc[a][g2][1],
+                                     f'{c1}:{loc[b][g1][1]}', f'{c2}:{loc[b][g2][1]}',
+                                     'other_chrom' if c1 != c2 else f'moved:{abs(loc[b][g2][1] - loc[b][g1][1])}'])
+            summary.append((a, b, len(shared), n, kept))
+    specific = collections.Counter()
+    with open(f'{pre}.breakpoints.tsv', 'w') as fh:
+        fh.write('species_a\tspecies_b\tgroup1\tgroup2\tchrom_a\tpos1_a\tpos2_a\tlocus1_b\tlocus2_b\tkind\ta_specific\n')
+        for r in rows:
+            c = calls[(r[0], r[2], r[3])]
+            spec = len(c) >= 2 and not any(c.values())
+            fh.write('\t'.join(map(str, r)) + '\t' + ('yes' if spec else 'no') + '\n')
+    for (a, _, _), c in calls.items():
+        if len(c) >= 2 and not any(c.values()):
+            specific[a] += 1
+
+    blocks = []
+    for sp, chroms in track.items():
+        for chrom, v in chroms.items():
+            run = []
+            for pos, gid, _ in v + [(None, None, None)]:
+                if gid is not None and count[sp][gid] > 1:
+                    run.append((pos, gid))
+                    continue
+                if len(run) >= min_dup_run:
+                    blocks.append((sp, chrom, run[0][0], run[-1][0], len(run), ','.join(g for _, g in run)))
+                run = []
+    with open(f'{pre}.dupblocks.tsv', 'w') as fh:
+        fh.write('species\tchrom\tstart\tend\tsites\tgroups\n')
+        for blk in blocks:
+            fh.write('\t'.join(map(str, blk)) + '\n')
+
+    print(f'anchor graph: {len(edges)} edges; adjacency kept between genomes (groups with one site in both):',
+          file=sys.stderr)
+    for a, b, sh, n, kept in summary:
+        if a < b:
+            back = next(x for x in summary if x[0] == b and x[1] == a)
+            print(f'  {a}-{b}: {sh} shared groups, {kept}/{n} adjacencies of {a} kept in {b}, '
+                  f'{back[4]}/{back[3]} of {b} kept in {a}', file=sys.stderr)
+    print('species-specific breakpoints (adjacency kept by no other species): '
+          + ', '.join(f'{sp} {specific[sp]}' for sp in species), file=sys.stderr)
+    dup = collections.Counter(blk[0] for blk in blocks)
+    print(f'duplicated blocks (>= {min_dup_run} consecutive multicopy sites): '
+          + ', '.join(f'{sp} {dup[sp]}' for sp in species), file=sys.stderr)
 
 
 def main():
@@ -633,6 +762,10 @@ def main():
     b.add_argument('--sine-length', type=int,
                    help='SINE consensus length used in the runs (default: inferred from locus window sizes)')
     b.add_argument('--top', type=int, default=15, help='patterns to print [15]')
+    b.add_argument('--max-spacer', type=int, default=0,
+                   help='do not link sites further apart than this (bp) in the edge table [0 = no limit]')
+    b.add_argument('--min-dup-run', type=int, default=3,
+                   help='consecutive multicopy sites that make a duplicated block [3]')
     b.set_defaults(func=cmd_build)
 
     o = sub.add_parser('orth', help='rebuild an orth table from stat files and alignments of an older run')

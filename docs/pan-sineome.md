@@ -101,6 +101,22 @@ Group IDs of the previous build that no longer exist as such:
 Group × species states, the number of groups per pattern, and a NEXUS 0/1 matrix of
 the variable groups (at least one P and one A; U and X coded `?`).
 
+### `PREFIX.edges.tsv`, `PREFIX.breakpoints.tsv`, `PREFIX.dupblocks.tsv` — the anchor graph
+
+Groups are the nodes of a graph; two groups are linked where their sites (copy or empty
+site, any state) are neighbours along a genome.
+
+- `edges.tsv`: `group1`, `group2`, `n_species`, then per species the spacer (bp between the
+  two sites) or `.` where they are not neighbours. `--max-spacer` drops longer links.
+  Spacers of one edge across species measure indels between the anchors.
+- `breakpoints.tsv`: for each ordered species pair (a, b), using only groups with a single
+  site in both, neighbours in a that are not neighbours in b: `kind` is `other_chrom` or
+  `moved:<bp apart in b>`. `a_specific = yes` when no other informative species keeps the
+  adjacency: a misjoin in assembly a, or a rearrangement on its lineage. Breakpoints at
+  scaffold ends of fragmented assemblies also show as `other_chrom`.
+- `dupblocks.tsv`: runs of at least `--min-dup-run` (3) consecutive sites of multicopy groups
+  in one genome: duplicated regions, or one region assembled twice (uncollapsed haplotypes).
+
 ## Group IDs
 
 IDs are `<prefix><7 digits>` (default prefix `PSG`). A fresh build numbers groups in
@@ -128,6 +144,7 @@ aliases table.
 
 - One comparison per new genome against a shared index of representative flanks of
   all groups, instead of pairwise runs.
+- Edge states from reads (spanning molecules: long or linked reads) and spacer outliers.
 - Verification of empty sites (distance between flanks, no residual SINE sequence).
 - Finer `copies` statuses from the ComPair.sh stat files (`shortRF`, `badLF`, ...).
 - Re-using a previous ID when a group that was merged by mistake is split again.

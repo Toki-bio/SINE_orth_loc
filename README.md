@@ -127,6 +127,10 @@ writes
 - `lacertids.evidence.tsv` — the pairwise rows behind each group
 - `lacertids.matrix.tsv`, `.patterns.tsv`, `.nex` — states, pattern counts, NEXUS 0/1 matrix
 - `lacertids.aliases.tsv` — IDs of the previous build that were merged, split or retired
+- `lacertids.edges.tsv`, `.breakpoints.tsv`, `.dupblocks.tsv` — the anchor graph: groups
+  that are neighbours along each genome with their spacers, adjacencies broken between genomes
+  (`a_specific`: kept by no other genome — a misjoin or a lineage rearrangement), and runs of
+  multicopy sites (duplicated or twice-assembled regions)
 
 States: **P** SINE present, **A** empty site with orthologous flanks, **U** no data,
 **X** ambiguous (contradicting calls, flag `inconsistent:<sp>`, or several loci of one
