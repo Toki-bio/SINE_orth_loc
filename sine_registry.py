@@ -20,6 +20,7 @@
            PREFIX.dupblocks.tsv runs of multicopy sites (duplicated or twice-assembled regions)
          States: P = SINE present, A = empty site (orthologous flanks, no SINE),
                  U = no data (no validated call for this species),
+                 M = missing: the only evidence is a window clipped by a contig end (orth status MISSING),
                  X = ambiguous (contradicting calls, or several loci of the species
                      joined into one group).
          Group IDs are kept across rebuilds with --previous; see docs/pan-sineome.md.
@@ -43,7 +44,7 @@ import re
 import sys
 
 LOCUS_RE = re.compile(r'^(.*):(\d+)-(\d+)\(([+-])\)$')
-METRICS = ['LF', 'FL', 'LFcp', 'RFlength', 'FR', 'RFcp', 'OneTwo', 'OneSINE', 'TwoSINE', 'SL', 'SO', 'ST']
+METRICS = ['LF', 'FL', 'LFcp', 'RFlength', 'FR', 'RFcp', 'OneTwo', 'OneSINE', 'TwoSINE', 'SL', 'SO', 'ST', 'FI']
 ORTH_COLUMNS = ['alignment', 'cluster', 'status', 'species1', 'locus1', 'sine1',
                 'species2', 'locus2', 'sine2'] + METRICS
 FLANK = 300  # left flank length used by SINE_orth_loc.bash
@@ -410,7 +411,7 @@ def cmd_build(args):
                 chrom, s, e, strand = parse_locus(locus)
                 n = uf.add()
                 nodes.append((sp, chrom, strand, insertion_anchor(chrom, s, e, strand, slop), s, e))
-                calls.append(sine == '1')
+                calls.append(True if sine == '1' else False if sine == '0' else 'M' if sine == 'M' else None)
                 ids.append(n)
             edges.append((ids[0], ids[1], os.path.basename(path), r))
 
@@ -464,7 +465,7 @@ def cmd_build(args):
     node_copy = {}
     first_node_of_copy = {}
     for i, (sp, chrom, strand, anchor, _, _) in enumerate(nodes):
-        if calls[i] and sp in copies:
+        if calls[i] is True and sp in copies:
             c = copy_at(sp, chrom, strand, anchor)
             if c:
                 node_copy[i] = c
@@ -490,12 +491,21 @@ def cmd_build(args):
             if not sp_sites:
                 states[sp], cells[sp] = 'U', '.'
                 continue
-            seen = {calls[i] for ids in sp_sites.values() for i in ids}
+            # sites with a presence call; sites known only from a clipped window (M) or a link (None)
+            # count only when the species has no called site
+            called = {k: ids for k, ids in sp_sites.items() if any(calls[i] in (True, False) for i in ids)}
+            if not called:
+                ids = [i for v in sp_sites.values() for i in v]
+                states[sp] = 'M' if any(calls[i] == 'M' for i in ids) else 'U'
+                cells[sp] = ','.join(sorted({f'{nodes[i][1]}:{nodes[i][3]}({nodes[i][2]})' for i in ids})) if states[sp] == 'M' else '.'
+                continue
+            sp_sites = called
+            seen = {calls[i] for ids in sp_sites.values() for i in ids if calls[i] in (True, False)}
             parts = []
             for ids in sp_sites.values():
                 chrom, strand = nodes[ids[0]][1], nodes[ids[0]][2]
                 anchor = sorted(nodes[i][3] for i in ids)[len(ids) // 2]
-                has_sine = any(calls[i] for i in ids)
+                has_sine = any(calls[i] is True for i in ids)
                 found = collections.Counter(node_copy[i]['id'] for i in ids if i in node_copy)
                 c = next(node_copy[i] for i in ids if i in node_copy and node_copy[i]['id'] == found.most_common(1)[0][0]) if found else None
                 if c:
@@ -544,14 +554,14 @@ def cmd_build(args):
     patterns = collections.Counter()
     variable = []
     with open(f'{pre}.groups.tsv', 'w') as gt, open(f'{pre}.matrix.tsv', 'w') as mt:
-        gt.write('\t'.join(['group', 'family', 'subfamily', 'pattern', 'n_P', 'n_A', 'n_U', 'n_X', 'pairs', 'flags'] + species) + '\n')
+        gt.write('\t'.join(['group', 'family', 'subfamily', 'pattern', 'n_P', 'n_A', 'n_U', 'n_X', 'n_M', 'pairs', 'flags'] + species) + '\n')
         mt.write('\t'.join(['group'] + species) + '\n')
         for g in groups:
             pat = ''.join(g['states'][sp] for sp in species)
             patterns[pat] += 1
             cnt = collections.Counter(pat)
             gt.write('\t'.join([g['id'], g['family'], g['subfamily'], pat, str(cnt['P']), str(cnt['A']), str(cnt['U']),
-                                str(cnt['X']), str(g['pairs']), ','.join(g['flags']) or '.']
+                                str(cnt['X']), str(cnt['M']), str(g['pairs']), ','.join(g['flags']) or '.']
                                + [g['cells'][sp] for sp in species]) + '\n')
             mt.write('\t'.join([g['id']] + [g['states'][sp] for sp in species]) + '\n')
             if cnt['P'] and cnt['A']:
@@ -566,7 +576,7 @@ def cmd_build(args):
         nx.write('#NEXUS\n[SINE presence/absence from sine_registry.py: 1 = SINE, 0 = empty site, ? = no data or ambiguous]\n')
         nx.write(f'BEGIN DATA;\n  DIMENSIONS NTAX={len(species)} NCHAR={len(variable)};\n'
                  '  FORMAT DATATYPE=STANDARD SYMBOLS="01" MISSING=?;\n  MATRIX\n')
-        code = {'P': '1', 'A': '0', 'U': '?', 'X': '?'}
+        code = {'P': '1', 'A': '0', 'U': '?', 'X': '?', 'M': '?'}
         for sp in species:
             nx.write(f'    {sp}  ' + ''.join(code[st[sp]] for _, st in variable) + '\n')
         nx.write('  ;\nEND;\n')

@@ -19,6 +19,25 @@ CP_SINE_PID=${CP_SINE_PID:-65}      # SINE in both: min % identity between the t
 CP_SINE_NID=${CP_SINE_NID:-100}     # SINE in both: min identical nt between SINEs and with consensus
 CP_CUT_PID=${CP_CUT_PID:-70}        # SINE in one: min % identity of the trimmed right flank
 CP_CUT_NID=${CP_CUT_NID:-120}       # SINE in one: min identical nt in the trimmed right flank
+CP_INDEL_MIN=${CP_INDEL_MIN:-50}    # right flank: one-sided gap runs >= this are masked before re-testing (0: off)
+# CP_SIZES: chrom<TAB>size of both genomes; rejected loci whose window touches a sequence end -> contig_end
+HELPER="$(dirname "$(readlink -f "$0")")/compair_flank.py"
+PY=${PYTHON:-python3}
+FI=0                                 # 1: right flank passed only after masking a large indel
+EDGE=-1                              # which locus (0/1) has its window clipped by a sequence end
+at_edge() {  # $1: alignment file (default $bank)
+    [[ -n "$CP_SIZES" && -s "$CP_SIZES" ]] || return 1
+    EDGE=$("$PY" "$HELPER" edge "${1:-$bank}" "$CP_SIZES"); [[ "$EDGE" =~ ^[0-9]+$ ]] || { EDGE=-1; return 1; }
+}
+# contig_end if the left flank (orthology evidence) is good, contig_end_lf otherwise
+edge_status() { if [[ ${LFcp:-0} -gt $CP_FLANK_NID && $LF -gt $CP_FLANK_LEN && ${FL:-0} -gt $CP_FLANK_PID ]]; then echo contig_end; else echo contig_end_lf; fi; }
+# masked re-test of right-flank columns $1..$2; needs > $3 % identity and > $4 identical nt over >= CP_FLANK_LEN kept columns
+masked_rf_ok() {
+    [[ "$CP_INDEL_MIN" -gt 0 ]] || return 1
+    read -r mpid mnid mcols mmasked <<< "$("$PY" "$HELPER" mask "$bank" "$1" "$2" "$CP_INDEL_MIN")"
+    echo "masked right flank: pid=$mpid nid=$mnid cols=$mcols masked=$mmasked"
+    [[ "$mmasked" -gt 0 && "$mcols" -ge "$CP_FLANK_LEN" && "$mpid" -gt "$3" && "$mnid" -gt "$4" ]]
+}
 seqkit range -r -1:-1 -w 0 $bank | awk -F '[^-]+' 'NR!=1 {for (i=1; i<=NF; i++) if ($i != "") print length($i)}' > $bank.gaps # first and last values are lengths of 3' and 5' rows of consecutive gaps in SINE sequence
 LF=$(awk 'NR==1' $bank.gaps) # right coordinate of the left flank
 RFlength=$(awk 'END {print}' $bank.gaps) # length of the right flank
@@ -35,14 +54,21 @@ if [[ "$LF" -le "$CP_FLANK_LEN" ]]; then echo "Short FLANK! Trying to fix it"
     LF=$(seqkit range -r -1:-1 -w 0 $bank | awk -F '[^-]+' 'NR!=1 {print length($1)}') # recalculating new left flank coordinate
     echo new left flank $LF
 fi
-if [[ "$RFlength" -lt "$CP_FLANK_LEN" ]]; then echo "Short FRANK!"; mv $bank $bank.shortRF; status=$(echo "shortRF"); echo $bank $status >> "$STAT"; exit; fi
+if [[ "$RFlength" -lt "$CP_FLANK_LEN" ]]; then echo "Short FRANK!"
+    if at_edge; then
+        seqkit subseq -r 1:$LF -w 0 $bank | esl-alipid - | awk 'NR==2 {print $3,$4}' > $bank.lfstat
+        FL=$(awk -F. '{print $1}' $bank.lfstat); LFcp=$(awk '{print $2}' $bank.lfstat); rm -f $bank.lfstat $bank.seqkit.fai
+        status=$(edge_status); mv $bank $bank.$status
+        echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength EDGE=$EDGE >> "$STAT"; exit
+    fi
+    mv $bank $bank.shortRF; status=$(echo "shortRF"); echo $bank $status >> "$STAT"; exit; fi
 
 leftSINE=$(seqkit range -r -1:-1 -w 0 $bank | awk '/^[^-]/{if (NR==2) print "0"}')
 if [[ "$leftSINE" == 0 ]]
        then
         echo "Skipping (leftSINE)"
         mv $bank $bank.lfSINE; status=$(echo "lfSINE")
-echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST >> "$STAT"
+echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST FI=$FI EDGE=$EDGE >> "$STAT"
         exit 111 # aborting search in this locus
 fi
 
@@ -53,7 +79,7 @@ if [[ "$rightSINE" == "-" ]]
         else
         mv $bank $bank.rfSINE; status=$(echo "rfSINE")
         echo "Skipping (rightSINE)"
-echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST >> "$STAT"
+echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST FI=$FI EDGE=$EDGE >> "$STAT"
         exit 111 # aborting search in this locus
 fi
 
@@ -90,19 +116,22 @@ if [[ $LFcp -gt $CP_FLANK_NID && $LF -gt $CP_FLANK_LEN && $FL -gt $CP_FLANK_PID 
 	    then echo SINE in both, next check right flank
 		if [[ $RFlength -gt $CP_FLANK_LEN && $FR -gt $CP_FLANK_PID ]]
 		    then echo right flank is good, homozygous copy; mv $bank $bank.SINE; status=$(echo "SINE")
+		elif masked_rf_ok $RFcut $len $CP_FLANK_PID 0
+		    then echo right flank good after masking a large indel; FI=1; mv $bank $bank.SINE; status=$(echo "SINE")
 		    else echo right flank bad, next try to fix it?; mv $bank $bank.badRF; status=$(echo "badRF")
 		fi
 	    else echo SINE can be polymorphic, need to check right flank, preparing it first
 		seqkit subseq -r $RFcut:$len -w 0 $bank > $bank.tocut
 		cutRF=$(awk '!/^>/ { sub(/-*$/, ""); print}' $bank.tocut | awk 'NR<3 {print length($0)}' | sort -n | head -n 1)   #delete overhang at the tail of minus sequence
 		    if [[ $cutRF -le $CP_FLANK_LEN ]]
-			then echo Right flank too short; mv $bank $bank.shortRF; status=$(echo "shortRF"); rm $bank.tocut* $bank*.fai $bank.stats
-echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST >> "$STAT"; exit
+			then echo Right flank too short; status=shortRF; at_edge && status=$(edge_status); mv $bank $bank.$status; rm $bank.tocut* $bank*.fai $bank.stats
+echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST FI=$FI EDGE=$EDGE >> "$STAT"; exit
 		    fi
 		seqkit subseq -r 1:$cutRF -w 0 $bank.tocut | esl-alipid - | awk 'NR==2 {print $3,$4,"FRANKcut"}' >> $bank.stats; rm $bank.tocut*
 		FRcut=$(awk -F. 'NR==9 {print $1}' $bank.stats) # identity in cut franks
 		FRcp=$(awk 'NR==9 {print $2}' $bank.stats) # number of identical nt in cut franks
-		if [[ $cutRF -gt $CP_FLANK_LEN && $FRcut -gt $CP_CUT_PID && $FRcp -gt $CP_CUT_NID ]]
+		if [[ $cutRF -gt $CP_FLANK_LEN && $FRcut -gt $CP_CUT_PID && $FRcp -gt $CP_CUT_NID ]] || \
+		   { masked_rf_ok $RFcut $((RF+cutRF)) $CP_CUT_PID $CP_CUT_NID && FI=1; }
 	    	    then echo right flank is good, heterozygous copy, next find which plus/minus
 			trim_right=$((RF+cutRF))
 			seqkit subseq -r 1:$trim_right -w 0 $bank > $bank.trim
@@ -119,7 +148,8 @@ echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp
 	fi
     else echo left flank bad $LFcp $LF $FL; mv $bank $bank.badLF; status=$(echo "badLF")
 fi
-echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST >> "$STAT"
+if [[ "$status" == bad* ]] && at_edge "$bank.$status"; then new=$(edge_status); mv $bank.$status $bank.$new; status=$new; fi
+echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST FI=$FI EDGE=$EDGE >> "$STAT"
 rm $bank.seqkit.fai $bank.stats
 exit
 

@@ -245,6 +245,9 @@ BUNDLE="$WD/aln_${sp1}-${sp2}"
 for t in PM MP SINE rejected; do rm -f "${BUNDLE}_$t.aln.gz"; echo "##SINE_orth_loc bundle v1" > "${BUNDLE}_$t.aln"; done
 rm -f statcoords statpairs
 cut -f1 "$1.fai" > "$WD/$sp1.chroms"
+# sequence sizes of both genomes: ComPair.sh reports loci whose window is clipped by a contig end as contig_end
+cut -f1,2 "$1.fai" "$2.fai" > "$WD/$sp1-$sp2.sizes"
+export CP_SIZES="$WD/$sp1-$sp2.sizes" PYTHON
 
 # each parallel ComPair.sh job writes its own *.stat file; merge them into "stat"
 # serially so concurrent appends cannot interleave (unsafe on NFS/Lustre)
@@ -256,8 +259,8 @@ collect_stats() {
 # coordinates of both loci in every validated alignment of the current batch
 # (statcoords: "cluster locus" per sequence; statpairs: alignment, seq1 locus, seq2 locus)
 collect_coords() {
-    for i in *.cl.*.PM *.cl.*.MP *.cl.*.SINE; do [ -f "$i" ] || continue
-     awk -F:: 'NR==1 || NR==3 {c=FILENAME; sub(/\..*/,"",c); h=$1; sub(/^>/,"",h); print c, h}' "$i" >> "$WD/statcoords"
+    for i in *.cl.*.PM *.cl.*.MP *.cl.*.SINE *.cl.*.contig_end; do [ -f "$i" ] || continue
+     [[ "$i" == *.contig_end ]] || awk -F:: 'NR==1 || NR==3 {c=FILENAME; sub(/\..*/,"",c); h=$1; sub(/^>/,"",h); print c, h}' "$i" >> "$WD/statcoords"
      awk -F:: 'NR==1 {h1=$1} NR==3 {h2=$1} END {sub(/^>/,"",h1); sub(/^>/,"",h2); print FILENAME"\t"h1"\t"h2}' "$i" >> "$WD/statpairs"
     done
 }
@@ -435,13 +438,18 @@ awk '{if (NF>3) print $3}' statcomb | sort | uniq -c > MP_PM_SINE_"$sp1"-"$sp2".
 # sine1/sine2: 1 if that locus carries the SINE. Input for sine_registry.py build.
 echo "writing orth_$sp1-$sp2.tsv"
 awk -v sp1=$sp1 -v sp2=$sp2 -F'\t' '
+ BEGIN {OFS="\t"; n=split("LF FL LFcp RFlength FR RFcp OneTwo OneSINE TwoSINE SL SO ST FI",K," ")
+     printf "alignment\tcluster\tstatus\tspecies1\tlocus1\tsine1\tspecies2\tlocus2\tsine2"; for (i=1;i<=n;i++) printf "\t%s", K[i]; print ""}
  FILENAME==ARGV[1] {g1[$1]; next}
- FILENAME ~ /(^|\/)stat_/ {split($0,f," "); b=f[1]; sub(/^\.\//,"",b); m=""
-     for (i=3;i<=length(f);i++) m=m"\t"substr(f[i],index(f[i],"=")+1); met[b"."f[2]]=m; next}
+ FILENAME ~ /(^|\/)stat_/ {split($0,f," "); b=f[1]; sub(/^\.\//,"",b); delete kv
+     for (i=3;i<=length(f);i++) {p=index(f[i],"="); kv[substr(f[i],1,p-1)]=substr(f[i],p+1)}
+     m=""; for (i=1;i<=n;i++) m=m"\t"((K[i] in kv) ? kv[K[i]] : "")
+     met[b"."f[2]]=m; edge[b"."f[2]]=("EDGE" in kv) ? kv["EDGE"] : -1; next}
  ($1 in met) {st=$1; sub(/.*\./,"",st); cl=$1; sub(/\..*/,"",cl)
      c1=$2; sub(/:[0-9]+-[0-9]+\([+-]\)$/,"",c1); c2=$3; sub(/:[0-9]+-[0-9]+\([+-]\)$/,"",c2)
-     print $1,cl,st,((c1 in g1)?sp1:sp2),$2,((st=="PM"||st=="SINE")?1:0),((c2 in g1)?sp1:sp2),$3,((st=="MP"||st=="SINE")?1:0) met[$1]}
- BEGIN {OFS="\t"; print "alignment","cluster","status","species1","locus1","sine1","species2","locus2","sine2","LF","FL","LFcp","RFlength","FR","RFcp","OneTwo","OneSINE","TwoSINE","SL","SO","ST"}' \
+     if (st=="contig_end") {s1=(edge[$1]==0)?"M":"?"; s2=(edge[$1]==1)?"M":"?"; st="MISSING"}
+     else {s1=(st=="PM"||st=="SINE")?1:0; s2=(st=="MP"||st=="SINE")?1:0}
+     print $1,cl,st,((c1 in g1)?sp1:sp2),$2,s1,((c2 in g1)?sp1:sp2),$3,s2 met[$1]}' \
  "$1.fai" stat_doubles_"$sp1"-"$sp2" stat_multi_"$sp1"-"$sp2" stat_rescue_"$sp1"-"$sp2" statpairs > orth_"$sp1"-"$sp2".tsv
 
 # what became of every cluster: resolved (and how), rejected by ComPair.sh, or left unresolved
