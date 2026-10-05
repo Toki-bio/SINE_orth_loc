@@ -548,13 +548,25 @@ def cmd_supersede(args):
         for r in _read_tsv(f'{pre}.loci.tsv'):
             if r['class'] in ('nested', 'close', 'dimer', 'satellite'):
                 comp[(sp, r['chrom'])].append((int(r['start']) - 30, int(r['end']) + 30))
-    def inside(sp, locus, anchor):
-        if anchor in ('', None):
-            return False
-        chrom = locus.rsplit(':', 1)[0]
-        a = int(anchor)
-        return any(s0 <= a <= e0 for s0, e0 in comp.get((sp, chrom), ()))
     rows = _read_tsv(args.orth)
+    # tables made before the anchor columns: anchor from the window and the most common window length
+    lens = collections.Counter()
+    for r in rows:
+        for k in ('locus1', 'locus2'):
+            m = re.match(r'^(.*):(\d+)-(\d+)\(([+-])\)$', r[k])
+            if m:
+                lens[int(m.group(3)) - int(m.group(2))] += 1
+    slop = lens.most_common(1)[0][0] - 300 if lens else 0
+    def inside(sp, locus, anchor):
+        m = re.match(r'^(.*):(\d+)-(\d+)\(([+-])\)$', locus)
+        if not m:
+            return False
+        chrom = m.group(1)
+        if anchor not in ('', None):
+            a = int(anchor)
+        else:
+            a = int(m.group(3)) - slop if m.group(4) == '+' else int(m.group(2)) + slop
+        return any(s0 <= a <= e0 for s0, e0 in comp.get((sp, chrom), ()))
     with open(args.orth) as fh:
         header = fh.readline()
     kept, dropped = [], []
