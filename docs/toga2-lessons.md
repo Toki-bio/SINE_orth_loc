@@ -11,6 +11,17 @@ designs: TOGA2 projects a reference through whole-genome alignment chains and de
 5′ flank** of every copy in both genomes and decides from **local identity** of the aligned flanks
 and the insertion site.
 
+## Status (v2.2)
+
+Implemented and tested (see README "Nested, close, satellite and edge cases"): **2** Missing state
+(`contig_end` → `MISSING` rows → registry state M), **3** flank-indel masking (`FI=1`), **6** compound loci
+(`sine_nest.py scan/orth/supersede`, extended to nested SINE-in-SINE with TSD-verified host reassembly
+and satellites), exact alignment anchors in the orth table (`--precise-tol`), and a TinT-style
+chronology. **4** was examined with a real read-labelled set instead of TOGA-style weak labels:
+ComPair calls are 99.2–99.8% consistent with reads, and a metric-based model ranks the rest with
+AUC 0.70 — useful for triage, not as a replacement classifier. Open: **1** neighbour-anchor score,
+**5** weighted graph splitting, **7** split-contig sites, **8** shared flank index.
+
 ## Where SINE_orth_loc is objectively better
 
 | | SINE_orth_loc | TOGA2 | why it matters |
