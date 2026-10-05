@@ -24,9 +24,9 @@
         Writes rows in the orth_<a>-<b>.tsv format (status SINE/PM, cluster N<k>R) for sine_registry.py,
         plus ORTH.tsv.report with the outcome per element.
 
-  supersede ORTH.tsv --scan SP=PREFIX [SP=PREFIX ...] -o OUT.tsv
-        Main-pipeline rows (flank-based, clusters C...) with an insertion anchor inside a compound locus
-        (nested, close, dimer, satellite) are moved to OUT.tsv.superseded: in such loci the consensus aligns
+  supersede ORTH.tsv --scan SP=PREFIX [SP=PREFIX ...] --nested NESTED.tsv ... -o OUT.tsv
+        Main-pipeline rows (flank-based, clusters C...) with an insertion anchor inside a nested locus,
+        or inside another compound locus where --nested rows resolved the element, are moved to OUT.tsv.superseded: in such loci the consensus aligns
         to whichever element is most similar, so a flank-based row can pair an old host in one genome with a
         young insert in the other. The compound-locus rows (N...) of `orth` replace them.
 
@@ -60,6 +60,7 @@ MIN_PIECE = 20          # TinT: elements shorter than 20 nt are ignored
 JOIN_TOL = 30           # consensus coordinates of two host pieces may overlap (TSD) or gap by this much
 ADJ_TOL = 30            # max genomic gap between an insert and the host pieces around it
 FULL = 0.8              # near-full copy: >= 80% of the consensus
+SUBSTANTIAL = 0.5       # elements of close/dimer loci: >= 50% of the consensus (smaller: 'fragment')
 
 
 def die(msg):
@@ -247,17 +248,24 @@ def classify(pieces, seq, lib):
         cls = 'nested'
     elif any(r == 'split' for r in roles.values()):
         cls = 'split'
-    elif len(rest) == 2 and all(full[i] for i in rest) and pieces[rest[0]]['strand'] == pieces[rest[1]]['strand'] \
-            and pieces[rest[1]]['s'] - pieces[rest[0]]['e'] <= ADJ_TOL:
-        cls = 'dimer'
-        for i in rest:
-            roles[i] = 'dimer'
-    elif len(pieces) > 1:
-        cls = 'close'
-        for i in rest:
-            roles[i] = 'close'
     else:
-        cls = 'single'
+        # old fragments next to a copy are common in real genomes; only substantial elements (>= half
+        # the consensus) make a compound locus, smaller pieces are kept as 'fragment'
+        big = [i for i in rest if pieces[i]['ct'] - pieces[i]['cf'] + 1 >= SUBSTANTIAL * clen[pieces[i]['q']]]
+        for i in rest:
+            if i not in big:
+                roles[i] = 'fragment'
+        if len(big) == 2 and all(full[i] for i in big) and pieces[big[0]]['strand'] == pieces[big[1]]['strand'] \
+                and pieces[big[1]]['s'] - pieces[big[0]]['e'] <= ADJ_TOL:
+            cls = 'dimer'
+            for i in big:
+                roles[i] = 'dimer'
+        elif len(big) > 1:
+            cls = 'close'
+            for i in big:
+                roles[i] = 'close'
+        else:
+            cls = 'single'
     return roles, cls, events
 
 
@@ -493,7 +501,7 @@ def cmd_orth(args):
             def to_b(i):                            # T index -> genome b coordinate
                 return tb0 + i if bstr == '+' else be + ext - i
             A = ga.fetch(c, s0 - 60, e0 + 60); a0 = s0 - 60
-            test = [e for e in elems[lid] if e['role'] not in ('split', 'single', 'host5', 'host3')]
+            test = [e for e in elems[lid] if e['role'] not in ('split', 'single', 'fragment', 'host5', 'host3')]
             hosts = [e for e in elems[lid] if e['role'] in ('host5', 'host3')]
             if hosts:                               # a host is tested as one element, from its outer ends
                 test.append(dict(element='H' + '+'.join(h['element'] for h in hosts), role='host',
@@ -547,7 +555,7 @@ def cmd_supersede(args):
         sp, pre = spec.split('=', 1)
         for r in _read_tsv(f'{pre}.loci.tsv'):
             if r['class'] in ('nested', 'close', 'dimer', 'satellite'):
-                comp[(sp, r['chrom'])].append((int(r['start']) - 30, int(r['end']) + 30))
+                comp[(sp, r['chrom'])].append((int(r['start']) - 30, int(r['end']) + 30, r['class']))
     rows = _read_tsv(args.orth)
     # tables made before the anchor columns: anchor from the window and the most common window length
     lens = collections.Counter()
@@ -557,22 +565,42 @@ def cmd_supersede(args):
             if m:
                 lens[int(m.group(3)) - int(m.group(2))] += 1
     slop = lens.most_common(1)[0][0] - 300 if lens else 0
-    def inside(sp, locus, anchor):
+    def _anchor(locus, anchor):
         m = re.match(r'^(.*):(\d+)-(\d+)\(([+-])\)$', locus)
-        if not m:
-            return False
-        chrom = m.group(1)
         if anchor not in ('', None):
-            a = int(anchor)
-        else:
-            a = int(m.group(3)) - slop if m.group(4) == '+' else int(m.group(2)) + slop
-        return any(s0 <= a <= e0 for s0, e0 in comp.get((sp, chrom), ()))
+            return int(anchor)
+        return int(m.group(3)) - slop if m.group(4) == '+' else int(m.group(2)) + slop
+    def inside(sp, locus, anchor):
+        """class of the compound locus containing the anchor, or None"""
+        if not re.match(r'^(.*):(\d+)-(\d+)\(([+-])\)$', locus):
+            return None
+        a = _anchor(locus, anchor)
+        for s0, e0, cls in comp.get((sp, locus.rsplit(':', 1)[0]), ()):
+            if s0 <= a <= e0:
+                return cls
+        return None
     with open(args.orth) as fh:
         header = fh.readline()
+    # anchors of elements that the compound-locus test resolved (orth rows N...), per species/chrom
+    resolved = collections.defaultdict(list)
+    for path in args.nested or []:
+        for r in _read_tsv(path):
+            for k in ('1', '2'):
+                if r.get('anchor' + k):
+                    resolved[(r['species' + k], r['locus' + k].rsplit(':', 1)[0])].append(int(r['anchor' + k]))
+    def replaced(sp, locus, anchor):
+        """nested loci: always (host/insert mix-ups); other compound loci: only if a compound call exists"""
+        cls = inside(sp, locus, anchor)
+        if cls is None:
+            return False
+        if cls == 'nested':
+            return True
+        a = _anchor(locus, anchor)
+        return any(abs(a - x) <= 20 for x in resolved.get((sp, locus.rsplit(':', 1)[0]), ()))
     kept, dropped = [], []
     for r in rows:
         main = not r['cluster'].startswith('N')
-        if main and (inside(r['species1'], r['locus1'], r.get('anchor1')) or inside(r['species2'], r['locus2'], r.get('anchor2'))):
+        if main and (replaced(r['species1'], r['locus1'], r.get('anchor1')) or replaced(r['species2'], r['locus2'], r.get('anchor2'))):
             dropped.append(r)
         else:
             kept.append(r)
@@ -716,6 +744,9 @@ def main():
     u = sub.add_parser('supersede', help='move flank-based rows inside compound loci aside')
     u.add_argument('orth', help='orth_<a>-<b>.tsv (with anchor1/anchor2 columns)')
     u.add_argument('--scan', nargs='+', required=True, metavar='SP=PREFIX')
+    u.add_argument('--nested', nargs='*', metavar='NESTED.tsv',
+                   help='orth output(s) of the compound-locus test: outside nested loci, a flank-based row is '
+                        'replaced only where these resolved the element')
     u.add_argument('-o', '--output', required=True)
     u.set_defaults(func=cmd_supersede)
     t = sub.add_parser('tint', help='TinT-style chronology from nesting events')

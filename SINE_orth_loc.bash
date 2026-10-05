@@ -479,7 +479,8 @@ if [[ "$NEST" == 1 ]]; then
             --sine-length "$SINElength" --threads "$THREADS"
         "$PYTHON" "$NEST_PY" orth --a "$sp2=$2" --b "$sp1=$1" --scan nest_"$sp2" -o nested_"$sp2"-in-"$sp1".tsv \
             --sine-length "$SINElength" --threads "$THREADS"
-        "$PYTHON" "$NEST_PY" supersede orth_"$sp1"-"$sp2".tsv --scan "$sp1=nest_$sp1" "$sp2=nest_$sp2" -o orth.tmp \
+        "$PYTHON" "$NEST_PY" supersede orth_"$sp1"-"$sp2".tsv --scan "$sp1=nest_$sp1" "$sp2=nest_$sp2" \
+            --nested nested_"$sp1"-in-"$sp2".tsv nested_"$sp2"-in-"$sp1".tsv -o orth.tmp \
             && mv orth.tmp orth_"$sp1"-"$sp2".tsv && mv orth.tmp.superseded orth_"$sp1"-"$sp2".superseded.tsv
         tail -n +2 -q nested_"$sp1"-in-"$sp2".tsv nested_"$sp2"-in-"$sp1".tsv >> orth_"$sp1"-"$sp2".tsv
     else
