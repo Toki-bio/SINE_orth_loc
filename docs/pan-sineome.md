@@ -47,7 +47,8 @@ files of SINE_orth_loc and, optionally, the BED files of all annotated copies.
 | P | SINE present at the site |
 | A | empty site: orthologous flanks, no SINE |
 | U | no data: no validated evidence for this genome |
-| X | ambiguous: contradicting calls (`inconsistent:<sp>`), or several sites of the genome joined into the group (`multicopy:<sp>`) |
+| X | ambiguous: contradicting calls (`inconsistent:<sp>`), several sites of the genome joined into the group (`multicopy:<sp>`), or a satellite array unit (`satellite:<sp>`, with `--caution`) |
+| M | missing: the only evidence is a window clipped by a contig end (orth status `MISSING`) — sequence absent from the assembly, not an empty site |
 
 ## Tables
 
@@ -61,9 +62,9 @@ All tables are tab-separated with one header line. `PREFIX` is the build's outpu
 | family | most frequent family of the group's copies (`.` without `--copies`) |
 | subfamily | most frequent subfamily among the group's copies with status `assigned` (`.` if none) |
 | pattern | states in species order, e.g. `PPAU` |
-| n_P, n_A, n_U, n_X | number of genomes in each state |
+| n_P, n_A, n_U, n_X, n_M | number of genomes in each state |
 | pairs | number of evidence rows |
-| flags | comma-separated: `multicopy:<sp>`, `inconsistent:<sp>`, `unannotated:<sp>` (P site without an annotated copy: usually a copy below the annotation's identity/length thresholds but above ComPair.sh's, found through a partner genome's flank), `family_mixed:<f1>/<f2>`, `subfamily_mixed:<s1>/<s2>` (assigned copies of different subfamilies: a lineage-specific subfamily, an assignment error, or a wrong group); `.` if none |
+| flags | comma-separated: `multicopy:<sp>`, `inconsistent:<sp>`, `unannotated:<sp>` (P site without an annotated copy: usually a copy below the annotation's identity/length thresholds but above ComPair.sh's, found through a partner genome's flank), `family_mixed:<f1>/<f2>`, `subfamily_mixed:<s1>/<s2>`, with `--caution` (sine_nest.py): `nested:<sp>` (the copy is a SINE inserted into an older one), `close:<sp>`, `dimer:<sp>`, `satellite:<sp>` (assigned copies of different subfamilies: a lineage-specific subfamily, an assignment error, or a wrong group); `.` if none |
 | one column per species | the copy, or the site (`chrom:pos(strand)`) for A/unannotated P; comma-separated when several; `.` for U |
 
 ### `PREFIX.copies.tsv` (with `--copies`)
@@ -116,6 +117,14 @@ site, any state) are neighbours along a genome.
   scaffold ends of fragmented assemblies also show as `other_chrom`.
 - `dupblocks.tsv`: runs of at least `--min-dup-run` (3) consecutive sites of multicopy groups
   in one genome: duplicated regions, or one region assembled twice (uncollapsed haplotypes).
+
+### Insertion sites and the orth table
+
+Since v2.2 the orth table has `anchor1`/`anchor2`: the insertion junction of each locus taken from the
+alignment (residues before the SINE start). With both anchors exact, sites are joined within
+`--precise-tol` (20 bp), otherwise within `--tol` (60 bp) of the anchor estimated from the window.
+Rows with status `MISSING` carry `M` for the clipped locus and `?` (no call, linkage only) for the other.
+Rows from `sine_nest.py orth` (clusters `N<k>R`) compare elements of compound loci.
 
 ## Group IDs
 

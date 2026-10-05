@@ -75,6 +75,70 @@ With GenBank-style names (`CM0…`, `JAW…`) every candidate pair looked like o
 and all multi clusters were dropped silently (empty `stat_multi_*`). It now uses the
 chromosome list of genome 1.
 
+## Nested, close, satellite and edge cases (v2.2)
+
+**SINE-in-SINE.** A SINE inserted into an older SINE splits it in two; the annotation (sear2k:
+≥ 80% length) reports the young copy but not the host halves, so the young copy's flanks *are*
+SINE sequence, and in a window holding host and insert the consensus aligns to whichever is most
+similar — a flank-based pair can join an old host in one genome with a young insert in the other.
+`sine_nest.py` (`NEST=1`, default; needs `nhmmer` from HMMER):
+
+- `scan` searches every copy ± 400 bp with nhmmer for SINE pieces ≥ 20 nt (TinT's minimum) and
+  classifies each locus: **nested** (two host pieces whose consensus coordinates join up around an
+  insert, the target site duplication verified in the sequence — reassembled hosts in
+  `nest_<sp>.reassembled.bed`), **split** (one copy annotated as two pieces), **dimer**, **satellite**
+  (≥ 3 periodic units sharing their spacers: not independent insertions), **close**, single;
+- `orth` compares compound loci through the flanks *outside* the whole locus (unique sequence) and
+  tests each element by its junctions against its empty-site junction with one TSD removed — the
+  host as one element from its outer ends, the insert inside it;
+- `supersede` moves flank-based rows with an anchor inside a compound locus to
+  `orth_<a>-<b>.superseded.tsv`; the compound rows (`N<k>R`) replace them;
+- `tint` orders (sub)families in time from nesting events (who inserted into whom), after
+  Kriegs et al. 2007 / Churakov et al. 2010 (TinT): one normally distributed activity period per type,
+  no target preference ⇒ P(A inserted into B | A–B nesting) = Φ((μA − μB)/√2); μ by maximum likelihood,
+  bootstrap intervals, types compared one way only reported as bounds. This is a reconstruction from the
+  published model assumptions, not the original TinT code. Within a nesting event the host is the
+  older element by definition; host and insert identity to the consensus are reported as a check.
+
+**Flank indels.** A second insertion or deletion of ≥ 50 bp next to the site used to fail the right
+flank (`badRF`); ComPair.sh now re-tests the right flank with such one-sided gap runs masked
+(`CP_INDEL_MIN`, 0 = off) and marks passing calls `FI=1`.
+
+**Contig ends.** Loci whose window is clipped by a sequence end are `contig_end` (the sequence is
+missing, not diverged) and enter the orth table as `MISSING` rows; the registry state is **M**.
+
+**Exact anchors.** ComPair.sh reports where the SINE starts in each aligned locus; the orth table
+carries `anchor1/anchor2`, and the registry joins sites with these exact anchors within
+`--precise-tol` (20 bp) instead of estimating them from window lengths (60 bp), which kept a nested
+insert's empty site apart from its host's junction.
+
+Tests (`tests/simulate_genomes2.py`: nested SINEs with TSDs, close insertions, flank indels, satellite
+arrays, contig ends, a haplotig, subfamilies; `tests/score_pairs2.py` scores with the alignment
+anchors against the full element truth):
+
+| class (4 pairs) | flank-based only (`NEST=0`) | with `sine_nest.py` (`NEST=1`) |
+| :- | :- | :- |
+| nested inserts | 18/19/24/27 of 37/54/56/51, 2–4 wrong per pair | 34/54/56/48, 0 wrong |
+| hosts | 69/65/66/64 of 88, 2–6 wrong | 79/76/76/72, 0 wrong |
+| close copies | 34/31/31/25 of 59/75/71/73 | 54/63/58/55 |
+| plain / repeat flank | 100%, 0 wrong | 100%, 0 wrong |
+
+Flank indels (89 per pair): 74/41/43/63 before masking, 80/54/56/72 with it, 0 wrong either way.
+
+`scan` finds 106/110 nested inserts (0 false, TSD in all, host the more diverged in all) and 14/14
+satellites; `tint` recovers the true order of 6 types (Spearman 1.00) from simulated insertion
+histories, also with unequal activity widths and ~180 events. Registry over the 4 simulated genomes:
+informative groups 38 → 130, groups joining different events (`family_mixed`) 37 → 19. On the real
+dva–mix rejected alignments, 198 of 3,000 `badRF` loci (6.6%) pass after indel masking.
+
+Real-data precision of ComPair.sh calls, measured with reads (`tests/build_training_set.py`): in the six
+pairs with D. valentini dvl, the dvl-side call of 265,145 rows was checked against read genotypes of the
+assembled individual (GQ ≥ 20, homozygous, unflagged groups): 0.22% of SINE, 0.77% of PM and 0.45% of MP
+calls are contradicted — about the genotyper's own error rate (0.37%). A logistic model on the ComPair
+metrics (`tests/fit_error_model.py`, held out by scaffold) ranks the contradicted calls with AUC 0.70:
+the 1% highest-risk calls are contradicted 5.2% of the time (18× the average), so the score is useful to
+pick calls for inspection, not to replace the thresholds.
+
 ## Alignment bundles
 
 Clusters are processed in batches of 100 in the scratch directory, and the resulting
