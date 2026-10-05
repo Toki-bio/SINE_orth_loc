@@ -45,6 +45,8 @@ len=$(seqkit range -r -1:-1 -w 0 $bank | awk 'NR==2 { print length($0) }') # ali
 RF=$((len-RFlength)) # left coordinate of the right flank
 echo LF=$LF len=$len RF=$RF RFlength=$RFlength
 rm $bank.gaps
+# residues of each locus before the SINE start (insertion junction within its window): LS1, LS2
+read -r LS1 LS2 <<< "$(seqkit seq -w 0 $bank | awk -v lf=$LF '!/^>/ {n++; if (n<=2) {s=substr($0,1,lf); gsub(/-/,"",s); printf "%d ", length(s)}}')"
 
 #report problematic flanks length
 if [[ "$LF" -le "$CP_FLANK_LEN" ]]; then echo "Short FLANK! Trying to fix it"
@@ -59,7 +61,7 @@ if [[ "$RFlength" -lt "$CP_FLANK_LEN" ]]; then echo "Short FRANK!"
         seqkit subseq -r 1:$LF -w 0 $bank | esl-alipid - | awk 'NR==2 {print $3,$4}' > $bank.lfstat
         FL=$(awk -F. '{print $1}' $bank.lfstat); LFcp=$(awk '{print $2}' $bank.lfstat); rm -f $bank.lfstat $bank.seqkit.fai
         status=$(edge_status); mv $bank $bank.$status
-        echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength EDGE=$EDGE >> "$STAT"; exit
+        echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength EDGE=$EDGE LS1=$LS1 LS2=$LS2 >> "$STAT"; exit
     fi
     mv $bank $bank.shortRF; status=$(echo "shortRF"); echo $bank $status >> "$STAT"; exit; fi
 
@@ -68,7 +70,7 @@ if [[ "$leftSINE" == 0 ]]
        then
         echo "Skipping (leftSINE)"
         mv $bank $bank.lfSINE; status=$(echo "lfSINE")
-echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST FI=$FI EDGE=$EDGE >> "$STAT"
+echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST FI=$FI EDGE=$EDGE LS1=$LS1 LS2=$LS2 >> "$STAT"
         exit 111 # aborting search in this locus
 fi
 
@@ -79,7 +81,7 @@ if [[ "$rightSINE" == "-" ]]
         else
         mv $bank $bank.rfSINE; status=$(echo "rfSINE")
         echo "Skipping (rightSINE)"
-echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST FI=$FI EDGE=$EDGE >> "$STAT"
+echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST FI=$FI EDGE=$EDGE LS1=$LS1 LS2=$LS2 >> "$STAT"
         exit 111 # aborting search in this locus
 fi
 
@@ -125,7 +127,7 @@ if [[ $LFcp -gt $CP_FLANK_NID && $LF -gt $CP_FLANK_LEN && $FL -gt $CP_FLANK_PID 
 		cutRF=$(awk '!/^>/ { sub(/-*$/, ""); print}' $bank.tocut | awk 'NR<3 {print length($0)}' | sort -n | head -n 1)   #delete overhang at the tail of minus sequence
 		    if [[ $cutRF -le $CP_FLANK_LEN ]]
 			then echo Right flank too short; status=shortRF; at_edge && status=$(edge_status); mv $bank $bank.$status; rm $bank.tocut* $bank*.fai $bank.stats
-echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST FI=$FI EDGE=$EDGE >> "$STAT"; exit
+echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST FI=$FI EDGE=$EDGE LS1=$LS1 LS2=$LS2 >> "$STAT"; exit
 		    fi
 		seqkit subseq -r 1:$cutRF -w 0 $bank.tocut | esl-alipid - | awk 'NR==2 {print $3,$4,"FRANKcut"}' >> $bank.stats; rm $bank.tocut*
 		FRcut=$(awk -F. 'NR==9 {print $1}' $bank.stats) # identity in cut franks
@@ -149,7 +151,7 @@ echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp
     else echo left flank bad $LFcp $LF $FL; mv $bank $bank.badLF; status=$(echo "badLF")
 fi
 if [[ "$status" == bad* ]] && at_edge "$bank.$status"; then new=$(edge_status); mv $bank.$status $bank.$new; status=$new; fi
-echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST FI=$FI EDGE=$EDGE >> "$STAT"
+echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST FI=$FI EDGE=$EDGE LS1=$LS1 LS2=$LS2 >> "$STAT"
 rm $bank.seqkit.fai $bank.stats
 exit
 

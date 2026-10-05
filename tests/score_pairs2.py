@@ -9,7 +9,8 @@ truth = {r['event']: r for r in csv.DictReader(open(f'{S}/truth.tsv'), delimiter
 def base(n): return re.sub(r'(_h[12]|_hap|_u\d+)$', '', n)
 copies = collections.defaultdict(list); sites = collections.defaultdict(list)
 for sp in (a, b):
-    for l in open(f'{S}/{sp}-SINEX.bed'):
+    truth_bed = f'{S}/{sp}.elements.bed'          # all elements (incl. unannotated hosts) if available
+    for l in open(truth_bed if __import__('os').path.exists(truth_bed) else f'{S}/{sp}-SINEX.bed'):
         ch, s, e, n, _, st = l.rstrip().split('\t'); s, e = int(s), int(e)
         copies[(sp, ch)].append((s if st == '+' else e, n))
     for l in open(f'{S}/{sp}.sites.tsv'):
@@ -20,9 +21,9 @@ rows = list(csv.DictReader(open(f'{run}/orth_{a}-{b}.tsv'), delimiter='\t'))
 L = collections.Counter(int(m.group(3)) - int(m.group(2)) for r in rows for k in ('locus1', 'locus2')
                         for m in [re.match(r'(.*):(\d+)-(\d+)\((.)\)', r[k])])
 slop = L.most_common(1)[0][0] - 300 if L else 0
-def ev(sp, locus, sine):
+def ev(sp, locus, sine, anchor=''):
     m = re.match(r'(.*):(\d+)-(\d+)\((.)\)', locus); ch, s, e, st = m.group(1), int(m.group(2)), int(m.group(3)), m.group(4)
-    anc = e - slop if st == '+' else s + slop
+    anc = int(anchor) if anchor else (e - slop if st == '+' else s + slop)   # alignment anchor if the table has it
     pool = copies[(sp, ch)] if sine == '1' else sites[(sp, ch)]
     best = min(pool, key=lambda x: abs(x[0] - anc), default=None)
     return best[1] if best and abs(best[0] - anc) <= 80 else None
@@ -37,7 +38,7 @@ for r in rows:
         e = ev_any(r['species' + side], r['locus' + side])
         missing['at simulated contig end' if e and base(e) in ends else 'elsewhere'] += 1
         continue
-    e1 = ev(r['species1'], r['locus1'], r['sine1']); e2 = ev(r['species2'], r['locus2'], r['sine2'])
+    e1 = ev(r['species1'], r['locus1'], r['sine1'], r.get('anchor1')); e2 = ev(r['species2'], r['locus2'], r['sine2'], r.get('anchor2'))
     if e1 is None or e2 is None:
         res['?']['unmatched'] += 1; continue
     b1, b2 = base(e1), base(e2); cls = truth.get(b1, {}).get('class', '?')
@@ -54,3 +55,10 @@ for cls in sorted(set(det) | set(res) - {'?'}):
     c = res[cls]
     print(f'  {cls:10s} recall {len(found[cls]):3d}/{len(det[cls]):3d}  correct={c["correct"]} wrong={c["wrong"]} paralog={c["paralog"]}'
           + (f' satellite_calls={c["satellite_call"]}' if c['satellite_call'] else ''))
+if len(sys.argv) > 5 and sys.argv[5] == '--wrong':
+    for r in rows:
+        if r['status'] == 'MISSING':
+            continue
+        e1 = ev(r['species1'], r['locus1'], r['sine1'], r.get('anchor1')); e2 = ev(r['species2'], r['locus2'], r['sine2'], r.get('anchor2'))
+        if e1 and e2 and base(e1) != base(e2):
+            print('WRONG', r['alignment'], r['status'], r['locus1'], e1, r['locus2'], e2)

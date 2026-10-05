@@ -108,7 +108,7 @@ def oriented(seq, strand): return seq if strand == "+" else rc(seq)
 
 contig_cut = {}                                               # ddd: (chrom) -> list of cut positions
 for sp in SP:
-    seqs = {}; bed = []; sites = []
+    seqs = {}; bed = []; sites = []; elems = []          # elems: every SINE element, annotated or not
     for c in range(1, 4):
         a = anc[c]; out = []; last = 0
         nonlocal_cur = [0]                                   # running coordinate in this species
@@ -151,10 +151,12 @@ for sp in SP:
                         bp = pos + k if ev["strand"] == "+" else pos + len(host) - k    # empty site of the insert
                         sites.append((nst["name"], f"{sp}_chr{c}", bp, nst["strand"] if ev["strand"] == "+" else ("-" if nst["strand"] == "+" else "+")))
                     g = oriented(hpart, ev["strand"]); L = len(g)
+                    elems.append((f"{sp}_chr{c}", pos, pos + L, ev["name"], ev["strand"]))
                     for tag, (s0, e0) in segs:
                         gs, ge = (pos + s0, pos + e0) if ev["strand"] == "+" else (pos + L - e0, pos + L - s0)
                         if tag == "y":
                             ystrand = nst["strand"] if ev["strand"] == "+" else ("-" if nst["strand"] == "+" else "+")
+                            elems.append((f"{sp}_chr{c}", gs, ge, nst["name"], ystrand))
                             bed.append((f"{sp}_chr{c}", gs, ge, nst["name"], ystrand))
                         elif e0 - s0 >= MIN_REPORT:
                             bed.append((f"{sp}_chr{c}", gs, ge, ev["name"] + ("" if tag == "h" else f"_{tag}"), ev["strand"]))
@@ -162,6 +164,7 @@ for sp in SP:
                 else:
                     g = oriented(host, ev["strand"])
                     bed.append((f"{sp}_chr{c}", pos, pos + len(g), ev["name"], ev["strand"]))
+                    elems.append((f"{sp}_chr{c}", pos, pos + len(g), ev["name"], ev["strand"]))
                     piece = g + a[p - ev["tsd"]:p]
                 out.append(piece); nonlocal_cur[0] += len(piece)
             elif kind == "indel":
@@ -173,15 +176,17 @@ for sp in SP:
                 if sp in CLADES[cl["br"]]:
                     g = oriented(cl["ins"], cl["strand"])
                     bed.append((f"{sp}_chr{c}", pos, pos + len(g), cl["name"], cl["strand"]))
+                    elems.append((f"{sp}_chr{c}", pos, pos + len(g), cl["name"], cl["strand"]))
                     piece = g + a[p - cl["tsd"]:p]; out.append(piece); nonlocal_cur[0] += len(piece)
         out.append(a[last:]); seqs[f"{sp}_chr{c}"] = mut("".join(out), 0.02)
     # ---- assembly artefacts
     if sp == "ccc":                                          # haplotig: 30 kb of chr1 assembled twice
         s0, e0 = 100000, 130000
         seqs["ccc_chr9"] = rnd(2000) + mut(seqs["ccc_chr1"][s0:e0], 0.004) + rnd(2000)
-        for b in list(bed):
-            if b[0] == "ccc_chr1" and s0 <= b[1] and b[2] <= e0:
-                bed.append(("ccc_chr9", b[1] - s0 + 2000, b[2] - s0 + 2000, b[3] + "_hap", b[4]))
+        for lst in (bed, elems):
+            for b in list(lst):
+                if b[0] == "ccc_chr1" and s0 <= b[1] and b[2] <= e0:
+                    lst.append(("ccc_chr9", b[1] - s0 + 2000, b[2] - s0 + 2000, b[3] + "_hap", b[4]))
         open("haplotig.tsv", "w").write(f"ccc\tccc_chr1\t{s0}\t{e0}\tccc_chr9\t2000\n")
     if sp == "ddd":                                          # contig breaks next to 18 sites
         plain_sites = [s for s in sites if not s[0].endswith("_rep")][5::12][:18]
@@ -203,6 +208,7 @@ for sp in SP:
         for ch, s, e, n, st in bed:
             nm, ns = rm(ch, s); bed2.append((nm, ns, ns + (e - s), n, st))
         bed = bed2
+        elems = [(rm(ch, s)[0], rm(ch, s)[1], rm(ch, s)[1] + (e - s), n, st) for ch, s, e, n, st in elems]
         sites = [(n, *rm(ch, pos), st) for n, ch, pos, st in sites]
         seqs = new
         with open("contig_ends.tsv", "w") as fh:
@@ -212,6 +218,9 @@ for sp in SP:
             fa.write(f">{ch}\n" + "\n".join(g[i:i + 80] for i in range(0, len(g), 80)) + "\n")
     with open(f"{sp}-SINEX.bed", "w") as fh:
         for ch, s, e, n, st in sorted(bed, key=lambda x: (x[0], x[1])):
+            fh.write(f"{ch}\t{s}\t{e}\t{n}\t0\t{st}\n")
+    with open(f"{sp}.elements.bed", "w") as fh:          # truth: every element incl. unannotated hosts
+        for ch, s, e, n, st in sorted(elems, key=lambda x: (x[0], x[1])):
             fh.write(f"{ch}\t{s}\t{e}\t{n}\t0\t{st}\n")
     with open(f"{sp}.sites.tsv", "w") as fh:
         for n, ch, pos, st in sites:

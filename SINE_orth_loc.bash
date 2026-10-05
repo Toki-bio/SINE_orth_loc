@@ -16,6 +16,8 @@ fi
 THREADS=${THREADS:-$(nproc)} # set THREADS to match the scheduler allocation on clusters
 RESCUE=${RESCUE:-1}          # 0: skip the two-flank rescue of unresolved multi-copy clusters
 RESCUE_PY="$(dirname "$(readlink -f "$0")")/rescue_multi.py"
+NEST=${NEST:-1}              # 0: skip nested/close/satellite analysis (sine_nest.py; needs nhmmer)
+NEST_PY="$(dirname "$(readlink -f "$0")")/sine_nest.py"
 PYTHON=${PYTHON:-python3}    # Python >= 3.7 (e.g. PYTHON=/usr/local/bin/python3.12 where python3 is older)
 
 for tool in mafft esl-alipid seqkit bedtools samtools sam2bed bwa ComPair.sh; do
@@ -439,17 +441,21 @@ awk '{if (NF>3) print $3}' statcomb | sort | uniq -c > MP_PM_SINE_"$sp1"-"$sp2".
 echo "writing orth_$sp1-$sp2.tsv"
 awk -v sp1=$sp1 -v sp2=$sp2 -F'\t' '
  BEGIN {OFS="\t"; n=split("LF FL LFcp RFlength FR RFcp OneTwo OneSINE TwoSINE SL SO ST FI",K," ")
-     printf "alignment\tcluster\tstatus\tspecies1\tlocus1\tsine1\tspecies2\tlocus2\tsine2"; for (i=1;i<=n;i++) printf "\t%s", K[i]; print ""}
+     printf "alignment\tcluster\tstatus\tspecies1\tlocus1\tsine1\tspecies2\tlocus2\tsine2"; for (i=1;i<=n;i++) printf "\t%s", K[i]; print "\tanchor1\tanchor2"}
  FILENAME==ARGV[1] {g1[$1]; next}
  FILENAME ~ /(^|\/)stat_/ {split($0,f," "); b=f[1]; sub(/^\.\//,"",b); delete kv
      for (i=3;i<=length(f);i++) {p=index(f[i],"="); kv[substr(f[i],1,p-1)]=substr(f[i],p+1)}
      m=""; for (i=1;i<=n;i++) m=m"\t"((K[i] in kv) ? kv[K[i]] : "")
-     met[b"."f[2]]=m; edge[b"."f[2]]=("EDGE" in kv) ? kv["EDGE"] : -1; next}
+     met[b"."f[2]]=m; edge[b"."f[2]]=("EDGE" in kv) ? kv["EDGE"] : -1
+     ls1[b"."f[2]]=kv["LS1"]; ls2[b"."f[2]]=kv["LS2"]; next}
  ($1 in met) {st=$1; sub(/.*\./,"",st); cl=$1; sub(/\..*/,"",cl)
      c1=$2; sub(/:[0-9]+-[0-9]+\([+-]\)$/,"",c1); c2=$3; sub(/:[0-9]+-[0-9]+\([+-]\)$/,"",c2)
      if (st=="contig_end") {s1=(edge[$1]==0)?"M":"?"; s2=(edge[$1]==1)?"M":"?"; st="MISSING"}
      else {s1=(st=="PM"||st=="SINE")?1:0; s2=(st=="MP"||st=="SINE")?1:0}
-     print $1,cl,st,((c1 in g1)?sp1:sp2),$2,s1,((c2 in g1)?sp1:sp2),$3,s2 met[$1]}' \
+     print $1,cl,st,((c1 in g1)?sp1:sp2),$2,s1,((c2 in g1)?sp1:sp2),$3,s2 met[$1], anchor($2,ls1[$1]), anchor($3,ls2[$1])}
+ # insertion junction in genome coordinates: window start + residues before the SINE (+), window end - them (-)
+ function anchor(locus, ls,   m) {if (ls=="") return ""; match(locus, /:([0-9]+)-([0-9]+)\(([+-])\)$/, m)
+     return (m[3]=="+") ? m[1]+ls : m[2]-ls}' \
  "$1.fai" stat_doubles_"$sp1"-"$sp2" stat_multi_"$sp1"-"$sp2" stat_rescue_"$sp1"-"$sp2" statpairs > orth_"$sp1"-"$sp2".tsv
 
 # what became of every cluster: resolved (and how), rejected by ComPair.sh, or left unresolved
@@ -457,3 +463,26 @@ echo "writing clusters_$sp1-$sp2.tsv"
 "$PYTHON" "$RESCUE_PY" account --double "$sp1-$sp2"_double --multi "$sp1-$sp2"_multi --poly "$sp1-$sp2"_poly \
  --stat stat_doubles_"$sp1"-"$sp2" stat_multi_"$sp1"-"$sp2" stat_rescue_"$sp1"-"$sp2" --statpairs statpairs \
  --rescue-report rescue_"$sp1-$sp2".tsv --out clusters_"$sp1"-"$sp2".tsv
+
+# nested (SINE-in-SINE), split, dimeric, close and satellite copies: sine_nest.py scan finds them with
+# nhmmer (incl. fragments below the annotation thresholds); compound loci are then compared through the
+# flanks outside the whole locus, and each element is tested by its junctions (orth rows N<k>R).
+# nest_<sp>.caution.bed lists copies whose flank-based calls need caution (sine_registry.py --caution).
+if [[ "$NEST" == 1 ]]; then
+    if command -v nhmmer > /dev/null; then
+        for sp in "$sp1" "$sp2"; do
+            g=$1; [[ "$sp" == "$sp2" ]] && g=$2
+            [[ -s nest_"$sp".loci.tsv ]] || "$PYTHON" "$NEST_PY" scan --genome "$g" --copies "$sp-$SINEname".bed \
+                --library "$SINEfa" -o nest_"$sp" --cpu "$THREADS"
+        done
+        "$PYTHON" "$NEST_PY" orth --a "$sp1=$1" --b "$sp2=$2" --scan nest_"$sp1" -o nested_"$sp1"-in-"$sp2".tsv \
+            --sine-length "$SINElength" --threads "$THREADS"
+        "$PYTHON" "$NEST_PY" orth --a "$sp2=$2" --b "$sp1=$1" --scan nest_"$sp2" -o nested_"$sp2"-in-"$sp1".tsv \
+            --sine-length "$SINElength" --threads "$THREADS"
+        "$PYTHON" "$NEST_PY" supersede orth_"$sp1"-"$sp2".tsv --scan "$sp1=nest_$sp1" "$sp2=nest_$sp2" -o orth.tmp \
+            && mv orth.tmp orth_"$sp1"-"$sp2".tsv && mv orth.tmp.superseded orth_"$sp1"-"$sp2".superseded.tsv
+        tail -n +2 -q nested_"$sp1"-in-"$sp2".tsv nested_"$sp2"-in-"$sp1".tsv >> orth_"$sp1"-"$sp2".tsv
+    else
+        echo "nhmmer (HMMER) not found: skipping the nested/close/satellite analysis (NEST=0 to silence)"
+    fi
+fi

@@ -46,7 +46,7 @@ import sys
 LOCUS_RE = re.compile(r'^(.*):(\d+)-(\d+)\(([+-])\)$')
 METRICS = ['LF', 'FL', 'LFcp', 'RFlength', 'FR', 'RFcp', 'OneTwo', 'OneSINE', 'TwoSINE', 'SL', 'SO', 'ST', 'FI']
 ORTH_COLUMNS = ['alignment', 'cluster', 'status', 'species1', 'locus1', 'sine1',
-                'species2', 'locus2', 'sine2'] + METRICS
+                'species2', 'locus2', 'sine2'] + METRICS + ['anchor1', 'anchor2']
 FLANK = 300  # left flank length used by SINE_orth_loc.bash
 
 
@@ -394,6 +394,7 @@ def cmd_build(args):
 
     uf = UnionFind()
     nodes = []            # node -> (species, chrom, strand, anchor, start, end)
+    precise = []          # node -> anchor taken from the alignment (exact) rather than the window
     calls = []            # node -> sine flag of the row side
     edges = []            # (node1, node2, source table, orth row)
     same_species = 0
@@ -404,19 +405,38 @@ def cmd_build(args):
                 same_species += 1  # paralogous pair within one genome: not an orthology edge
                 continue
             ids = []
-            for sp, locus, sine in ((r['species1'], r['locus1'], r['sine1']),
-                                    (r['species2'], r['locus2'], r['sine2'])):
+            for sp, locus, sine, anc in ((r['species1'], r['locus1'], r['sine1'], r.get('anchor1', '')),
+                                         (r['species2'], r['locus2'], r['sine2'], r.get('anchor2', ''))):
                 if sp not in species_seen:
                     species_seen.append(sp)
                 chrom, s, e, strand = parse_locus(locus)
                 n = uf.add()
-                nodes.append((sp, chrom, strand, insertion_anchor(chrom, s, e, strand, slop), s, e))
+                # insertion junction: from the alignment when the orth table has it (exact even for
+                # merged/extended windows), else from the window and the most common window length
+                a = int(anc) if anc not in ('', None) else insertion_anchor(chrom, s, e, strand, slop)
+                nodes.append((sp, chrom, strand, a, s, e))
+                precise.append(anc not in ('', None))
                 calls.append(True if sine == '1' else False if sine == '0' else 'M' if sine == 'M' else None)
                 ids.append(n)
             edges.append((ids[0], ids[1], os.path.basename(path), r))
 
     copies = load_copies(args.copies or [], args.close)
     load_subfamilies(args.subfamilies or [], copies)
+    # copies flagged by sine_nest.py scan (role in column 5): satellite units are not independent
+    # insertions (their groups become X); nested inserts and close/dimer copies keep their state
+    caution = collections.defaultdict(list)          # (species, chrom) -> [(start, end, role)]
+    for spec in args.caution or []:
+        sp, path = spec.split('=', 1)
+        with open_text(path) as fh:
+            for line in fh:
+                f = line.rstrip('\n').split('\t')
+                if len(f) >= 5:
+                    caution[(sp, f[0])].append((int(f[1]), int(f[2]), f[4]))
+    def caution_role(sp, c):
+        for s0, e0, role in caution.get((sp, c['chrom']), ()):
+            if min(e0, c['end']) - max(s0, c['start']) > 0.5 * (c['end'] - c['start']):
+                return role
+        return None
     species = args.species.split(',') if args.species else sorted(set(species_seen) | set(copies))
     unknown = (set(species_seen) | set(copies)) - set(species)
     if unknown:
@@ -429,7 +449,8 @@ def cmd_build(args):
         site.add()
     order = sorted(range(len(nodes)), key=lambda i: nodes[i][:4])
     for a, b in zip(order, order[1:]):
-        if nodes[a][:3] == nodes[b][:3] and nodes[b][3] - nodes[a][3] <= args.tol:
+        tol = args.precise_tol if precise[a] and precise[b] else args.tol
+        if nodes[a][:3] == nodes[b][:3] and nodes[b][3] - nodes[a][3] <= tol:
             site.union(a, b)
             uf.union(a, b)
     for a, b, _, _ in edges:
@@ -448,13 +469,13 @@ def cmd_build(args):
         v.sort(key=lambda x: x[0])
     ends_pos = {k: [x[0] for x in v] for k, v in ends.items()}
 
-    def copy_at(sp, chrom, strand, anchor):
+    def copy_at(sp, chrom, strand, anchor, tol):
         v = ends.get((sp, chrom))
         if not v:
             return None
         pos = ends_pos[(sp, chrom)]
         best = None
-        for i in range(bisect.bisect_left(pos, anchor - args.tol), bisect.bisect_right(pos, anchor + args.tol)):
+        for i in range(bisect.bisect_left(pos, anchor - tol), bisect.bisect_right(pos, anchor + tol)):
             p, _, c = v[i]
             key = (p != c['junction'], c['strand'] != strand, abs(p - anchor))
             if best is None or key < best[0]:
@@ -466,7 +487,7 @@ def cmd_build(args):
     first_node_of_copy = {}
     for i, (sp, chrom, strand, anchor, _, _) in enumerate(nodes):
         if calls[i] is True and sp in copies:
-            c = copy_at(sp, chrom, strand, anchor)
+            c = copy_at(sp, chrom, strand, anchor, args.precise_tol if precise[i] else args.tol)
             if c:
                 node_copy[i] = c
                 j = first_node_of_copy.setdefault(c['id'], i)
@@ -531,6 +552,12 @@ def cmd_build(args):
                 flags.add(f'inconsistent:{sp}')
             else:
                 states[sp] = 'P' if True in seen else 'A'
+        for c in group_copies:
+            role = caution_role(c['species'], c) if caution else None
+            if role == 'unit':
+                flags.add(f"satellite:{c['species']}"); states[c['species']] = 'X'
+            elif role in ('insert', 'close', 'dimer'):
+                flags.add(f"{'nested' if role == 'insert' else role}:{c['species']}")
         if len(fams) > 1:
             flags.add('family_mixed:' + '/'.join(sorted(fams)))
         if len(subfams) > 1:
@@ -760,6 +787,8 @@ def main():
     b.add_argument('--copies', action='append', metavar='SPECIES=BED',
                    help='annotated SINE copies of a species: sear2k <sp>-<FAMILY>.bed (family from the file '
                         'name) or BED6 with the family in the name column; repeat per species and family')
+    b.add_argument('--caution', action='append', metavar='SPECIES=BED',
+                   help='nest_<sp>.caution.bed from sine_nest.py scan: satellite units -> X, flags nested/close/dimer')
     b.add_argument('--subfamilies', action='append', metavar='SPECIES=TSV',
                    help='SINEderella step-2 assignment_full.tsv of a species; repeat per species')
     b.add_argument('--previous', metavar='PREFIX',
@@ -767,6 +796,9 @@ def main():
     b.add_argument('--id-prefix', default='PSG', help='prefix of new group IDs [PSG]')
     b.add_argument('--tol', type=int, default=60,
                    help='max distance (bp) between insertion sites of the same locus [60]')
+    b.add_argument('--precise-tol', type=int, default=20,
+                   help='max distance between insertion sites when both anchors come from alignments '
+                        '(orth anchor1/anchor2 columns): keeps a nested insert apart from its host [20]')
     b.add_argument('--close', type=int, default=300,
                    help='copies closer than this are excluded by the pipeline (bedtools cluster -d) [300]')
     b.add_argument('--sine-length', type=int,
