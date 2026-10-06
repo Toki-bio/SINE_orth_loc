@@ -131,6 +131,13 @@ histories, also with unequal activity widths and ~180 events. Registry over the 
 informative groups 38 → 130, groups joining different events (`family_mixed`) 37 → 19. On the real
 dva–mix rejected alignments, 198 of 3,000 `badRF` loci (6.6%) pass after indel masking.
 
+Real genomes (D. valentini dva, D. mixta mix; `darevskia-sineome-data`, branch `actions/nest`): 47 and 32
+nestings (host the more diverged element in 41/47 and 30/32, TSD found in 36/47 and 25/32, median 14 bp),
+10 and 7 satellite arrays, 481 and 373 dimers. Of the dva–mix flank-based rows, 736 fall in compound loci;
+the compound test agrees with 702 of them, differs in 18 (15 times flank "SINE" vs compound PM/MP — the
+host/insert pattern) and has no call for 16 nested ones. It adds 3,630 calls at elements without any
+flank-based row (2,661 SINE, 969 PM/MP), mostly copies that were excluded as closer than 300 bp.
+
 Real-data precision of ComPair.sh calls, measured with reads (`tests/build_training_set.py`): in the six
 pairs with D. valentini dvl, the dvl-side call of 265,145 rows was checked against read genotypes of the
 assembled individual (GQ ≥ 20, homozygous, unflagged groups): 0.22% of SINE, 0.77% of PM and 0.45% of MP
