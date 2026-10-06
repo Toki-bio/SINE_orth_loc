@@ -58,6 +58,12 @@ def open_text(path):
     return gzip.open(path, 'rt') if path.endswith('.gz') else open(path)
 
 
+def previous_groups(previous):
+    """PREFIX.groups.tsv of a previous build, or its gzipped copy."""
+    p = f'{previous}.groups.tsv'
+    return p if os.path.exists(p) or not os.path.exists(p + '.gz') else p + '.gz'
+
+
 def parse_locus(text):
     m = LOCUS_RE.match(text)
     if not m:
@@ -305,7 +311,7 @@ def assign_ids(groups, species, previous, prefix, tol):
 
     old_sites = collections.defaultdict(list)   # (species, chrom) -> [(junction, old id)]
     max_num = 0
-    with open(f'{previous}.groups.tsv') as fh:
+    with open_text(previous_groups(previous)) as fh:
         header = fh.readline().rstrip('\n').split('\t')
         for line in fh:
             row = dict(zip(header, line.rstrip('\n').split('\t')))
@@ -366,7 +372,7 @@ def assign_ids(groups, species, previous, prefix, tol):
             ids.append(f'{prefix}{max_num:07d}')
             aliases += [[oid, ids[-1], 'split'] for oid in sorted(shared[gi])]
     seen_old = set(winner)
-    with open(f'{previous}.groups.tsv') as fh:
+    with open_text(previous_groups(previous)) as fh:
         fh.readline()
         for line in fh:
             gid = line.split('\t', 1)[0]
