@@ -63,6 +63,19 @@ best (`--margin`, default 20) is accepted and checked with ComPair.sh like a dou
 - `rescue_<sp1>-<sp2>.tsv` — per copy: resolved (and the new cluster), ambiguous, no hit
 - `RESCUE=0` (or `--no-rescue` in the wrapper) reproduces the v2.0 behaviour
 
+### Running a pair in pieces (`STAGE`, `SHARD`)
+
+Where jobs have a time limit (CI runners, array jobs), a pair can be split; the alignment
+stage, which takes most of the time, runs in independent shards that need only the `.fai`
+files, the BED files and the consensus:
+
+    STAGE=prep   SINE_orth_loc.bash a.bnk b.bnk SINE.fa   # mapping, clustering, batch files
+    STAGE=align SHARD=3/8 SINE_orth_loc.bash a.bnk b.bnk SINE.fa   # batches 3, 11, 19, ... -> shard_3/
+    STAGE=finish SINE_orth_loc.bash a.bnk b.bnk SINE.fa   # merge shard_*/, rescue, tables, nesting
+
+The shards can run on different machines (copy `shard_<k>/` back before `finish`). The result
+is identical to `STAGE=all` (default): same orth table, cluster table and alignment bundles.
+
 On a simulated 4-species set where a quarter of the loci have a young repeat (~1%
 divergence) as left flank, plus 10 lineage-specific segmental duplications
 (`tests/`), recall per pair rose from 207–283 to 257–324 of 258–324 loci (repeat-flank

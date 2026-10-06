@@ -19,6 +19,19 @@ RESCUE_PY="$(dirname "$(readlink -f "$0")")/rescue_multi.py"
 NEST=${NEST:-1}              # 0: skip nested/close/satellite analysis (sine_nest.py; needs nhmmer)
 NEST_PY="$(dirname "$(readlink -f "$0")")/sine_nest.py"
 PYTHON=${PYTHON:-python3}    # Python >= 3.7 (e.g. PYTHON=/usr/local/bin/python3.12 where python3 is older)
+# A pair can be run in pieces (e.g. on CI runners or array jobs with a time limit), all in one directory
+# or with the directory copied between steps:
+#   STAGE=prep                 flank mapping and clustering; writes the batch files (PART*, MULTIPART*)
+#   STAGE=align SHARD=k/N      aligns and checks batches k, k+N, k+2N, ... into shard_<k>/ (needs only
+#                              the .fai files, the BED files and the consensus; no genome sequence)
+#   STAGE=finish               merges shard_*/, then rescue, tables and the nested-locus analysis
+# STAGE=all (default) runs everything in one go, as before.
+STAGE=${STAGE:-all}
+SHARD=${SHARD:-1/1}
+case "$STAGE" in all|prep|align|finish) ;; *) echo "STAGE must be all, prep, align or finish"; exit 1;; esac
+if ! [[ "$SHARD" =~ ^[0-9]+/[0-9]+$ ]] || (( ${SHARD%/*} < 1 || ${SHARD%/*} > ${SHARD#*/} )); then
+    echo "SHARD must be k/N with 1 <= k <= N"; exit 1
+fi
 
 for tool in mafft esl-alipid seqkit bedtools samtools sam2bed bwa ComPair.sh; do
     if ! command -v "$tool" > /dev/null 2>&1; then
@@ -76,6 +89,7 @@ if [ -f "$SINEs_in_genome2" ]; then echo Bank of $(wc -l $SINEs_in_genome2) SINE
     exit 1
 fi
 
+if [[ "$STAGE" == all || "$STAGE" == prep ]]; then
 # preparing left flanks
 
 echo clustering coordinates
@@ -231,6 +245,16 @@ cat $sp1-"$sp2"_oneline | awk -v sp1=$sp1 -v sp2=$sp2 -F">" '{if (NF<=3) print $
 
 echo "stage2 completed"
 
+# doubles and multies are processed in batches of 100 clusters (the units of STAGE=align shards)
+rm -f PART* MULTIPART*
+awk 'NR%100==1{x="PART"++i;}{print > x}' $sp1-"$sp2"_double
+awk 'NR%100==1{x="MULTIPART"++i;}{print > x}' $sp1-"$sp2"_multi
+fi
+if [[ "$STAGE" == prep ]]; then
+    echo "STAGE=prep done: $(ls PART* 2>/dev/null | wc -l) double and $(ls MULTIPART* 2>/dev/null | wc -l) multi batches"
+    exit 0
+fi
+
 # Doubles and multies are processed in batches of 100 clusters. Each batch runs
 # in its own scratch directory (node-local if SCRATCH_DIR, SLURM_TMPDIR or TMPDIR
 # is set), and its alignments are appended to one bundle per category, so the
@@ -241,15 +265,26 @@ echo "stage2 completed"
 
 WD=$(pwd)
 SINEfa=$(readlink -f "$3")
+cut -f1 "$1.fai" > "$WD/$sp1.chroms"
+# sequence sizes of both genomes: ComPair.sh reports loci whose window is clipped by a contig end as contig_end
+cut -f1,2 "$1.fai" "$2.fai" > "$WD/$sp1-$sp2.sizes"
+export CP_SIZES="$WD/$sp1-$sp2.sizes" PYTHON
+if [[ "$STAGE" == align ]]; then
+    # this shard's batches go to shard_<k>/, which then serves as the work directory
+    k=${SHARD%/*}; N=${SHARD#*/}
+    rm -rf "shard_$k"; mkdir -p "shard_$k"
+    for i in PART* MULTIPART*; do [ -f "$i" ] || continue
+        n=${i##*PART}; (( (n - 1) % N == k - 1 )) && cp "$i" "shard_$k/"
+    done
+    cp "$sp1.chroms" "shard_$k/"
+    cd "shard_$k" && WD=$(pwd)
+    echo "STAGE=align shard $SHARD: $(ls PART* 2>/dev/null | wc -l) double and $(ls MULTIPART* 2>/dev/null | wc -l) multi batches"
+fi
 SCRATCH=$(mktemp -d "${SCRATCH_DIR:-${SLURM_TMPDIR:-${TMPDIR:-$WD}}}/SINE_orth_loc_${sp1}-${sp2}.XXXXXX") || exit 1
 trap 'rm -rf "$SCRATCH"' EXIT
 BUNDLE="$WD/aln_${sp1}-${sp2}"
 for t in PM MP SINE rejected; do rm -f "${BUNDLE}_$t.aln.gz"; echo "##SINE_orth_loc bundle v1" > "${BUNDLE}_$t.aln"; done
 rm -f statcoords statpairs
-cut -f1 "$1.fai" > "$WD/$sp1.chroms"
-# sequence sizes of both genomes: ComPair.sh reports loci whose window is clipped by a contig end as contig_end
-cut -f1,2 "$1.fai" "$2.fai" > "$WD/$sp1-$sp2.sizes"
-export CP_SIZES="$WD/$sp1-$sp2.sizes" PYTHON
 
 # each parallel ComPair.sh job writes its own *.stat file; merge them into "stat"
 # serially so concurrent appends cannot interleave (unsafe on NFS/Lustre)
@@ -365,13 +400,10 @@ align_multies() {
     done
 }
 
+if [[ "$STAGE" == all || "$STAGE" == align ]]; then
 echo working with doubles
-echo splitting doubles into parts of 100
 
 : > stat
-awk 'NR%100==1{x="PART"++i;}{print > x}' $sp1-"$sp2"_double
-
-echo analyzing parts
 
 for i in PART*; do [ -f "$i" ] || continue
     run_batch "$i" align_doubles
@@ -384,8 +416,6 @@ echo "stage3 - aligning doubles - completed"
 echo "working with multies"
 
 : > stat
-awk 'NR%100==1{x="MULTIPART"++i;}{print > x}' $sp1-"$sp2"_multi
-
 echo aligning clusters
 
 for i in MULTIPART*; do [ -f "$i" ] || continue
@@ -393,6 +423,24 @@ for i in MULTIPART*; do [ -f "$i" ] || continue
 done
 
 mv stat stat_multi_"$sp1"-"$sp2"
+fi
+if [[ "$STAGE" == align ]]; then
+    for t in PM MP SINE rejected; do gzip -f "${BUNDLE}_$t.aln"; done
+    touch statcoords statpairs
+    echo "STAGE=align shard $SHARD done"
+    exit 0
+fi
+if [[ "$STAGE" == finish ]]; then
+    # merge the shards: stat files, coordinates and alignment bundles (one header per bundle)
+    ls -d shard_*/ > /dev/null 2>&1 || { echo "STAGE=finish: no shard_*/ directories"; exit 1; }
+    for f in stat_doubles_"$sp1"-"$sp2" stat_multi_"$sp1"-"$sp2" statcoords statpairs; do
+        cat shard_*/"$f" > "$f"
+    done
+    for t in PM MP SINE rejected; do
+        for z in shard_*/aln_"$sp1"-"$sp2"_$t.aln.gz; do zcat "$z" | tail -n +2; done >> "${BUNDLE}_$t.aln"
+    done
+    echo "merged $(ls -d shard_*/ | wc -l) shards"
+fi
 
 # Multi-copy clusters (3-10 loci, of which the multi stage keeps at most one pair, and
 # clusters of more than 10 loci) are usually due to a repetitive left flank. For every SINE
