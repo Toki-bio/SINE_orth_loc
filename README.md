@@ -82,6 +82,37 @@ partial and relabelled copies, shared or in one genome; 330 events):
 Bank mode: 330/330 events with the right status, no wrong pairs. The same toy run with the 600 bp
 consensus alone (`D.fa`, `aaa-D.bed`, `bbb-D.bed`): 70/330.
 
+## Flank length, mapper, one or both flanks (testing)
+
+    FLANK=500 MAPPER=minimap2 MM2_OPTS="-x sr -k 11 -w 3" BOTHFLANKS=1 SINE_orth_loc.bash ...
+
+- `FLANK` (300): flank length; copies closer than this form one locus; passed to the rescue and the
+  nested-locus steps.
+- `MAPPER` (bwa) / `MM2_OPTS` (`-x sr`): the left-flank mapper (`minimap2 -a --secondary=no`). Rescue and
+  the nested-locus step still use bwa.
+- `BOTHFLANKS` (0): 1 maps the right flanks too; a left-flank hit is kept only where the right flank of
+  the same copy maps on the same target sequence and strand, -30 to SINElength + 100 bp downstream.
+
+Toy (`tests/simulate_flanks.py`, 450 events: 266 plain, 63 with a repeat as left flank, 55 segmental
+duplicates in bbb, 40 contig ends, 26 right-flank indels; `RESCUE=0 NEST=0`), events with the right
+status, `tests/score_flanks.py`. No setting gave a wrong status or a wrong pair; one-flank runs at 300 bp
+gave 1-2 paralog pairs (segmental duplicate), both-flank runs none.
+
+| flank divergence | setting | 300, one | 300, both | 500, one | 500, both |
+|---|---|---|---|---|---|
+| ~6 % (`--div 0.03`) | bwa | 375 | 381 | 389 | 388 |
+| | minimap2 `-x sr` | 368 | 375 | 389 | 388 |
+| | minimap2 `-x sr -k 11 -w 3` | 375 | 379 | 389 | 388 |
+| | minimap2 `-x asm20` | 304 | 226 | 383 | 356 |
+| ~16 % (`--div 0.08`) | bwa | 302 | 269 | 335 | 333 |
+| | minimap2 `-x sr` | 101 | 22 | 166 | 69 |
+| | minimap2 `-x sr -k 11 -w 3` | 336 | 345 | 349 | 361 |
+| | minimap2 `-x asm20` | 0 | 0 | 15 | 0 |
+
+Per class: 500 bp flanks recover the right-flank indels (20 -> 26); both flanks recover repeat-flank loci
+(bwa 500 bp, 16 %: 14 -> 37) and lose contig-end loci (26 -> 17); segmental duplicates stay mostly
+unresolved without the rescue (~10/55).
+
 ## Multi-copy loci (multimappers)
 
 When a flank matches several places, loci join into clusters of 3–10 (multi) or more

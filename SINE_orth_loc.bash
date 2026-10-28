@@ -19,6 +19,12 @@ RESCUE_PY="$(dirname "$(readlink -f "$0")")/rescue_multi.py"
 NEST=${NEST:-1}              # 0: skip nested/close/satellite analysis (sine_nest.py; needs nhmmer)
 NEST_PY="$(dirname "$(readlink -f "$0")")/sine_nest.py"
 PYTHON=${PYTHON:-python3}    # Python >= 3.7 (e.g. PYTHON=/usr/local/bin/python3.12 where python3 is older)
+FLANK=${FLANK:-300}          # flank length (bp) mapped to the other genome; also the distance below which copies form one locus
+MAPPER=${MAPPER:-bwa}        # flank mapper: bwa (bwa mem) or minimap2 (minimap2 -a $MM2_OPTS); rescue and nest use bwa
+MM2_OPTS=${MM2_OPTS:--x sr}  # minimap2 options, e.g. "-x sr", "-x asm20", "-x sr -k 11 -w 5"
+BOTHFLANKS=${BOTHFLANKS:-0}  # 1: map the right flanks too and keep a left-flank hit only where the right flank of the
+                             # same copy maps on the same target sequence and strand, downstream of it
+                             # (0 to SINElength + 100 bp away)
 # A pair can be run in pieces (e.g. on CI runners or array jobs with a time limit), all in one directory
 # or with the directory copied between steps:
 #   STAGE=prep                 flank mapping and clustering; writes the batch files (PART*, MULTIPART*)
@@ -42,6 +48,9 @@ done
 if ! { [ -f "$RESCUE_PY" ] && "$PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 7))' 2> /dev/null; }; then
     echo "$PYTHON is not Python >= 3.7 or $RESCUE_PY is missing: set PYTHON=/path/to/python3.7+"; exit 1
 fi
+case "$MAPPER" in bwa) ;; minimap2) command -v minimap2 > /dev/null || { echo "minimap2: not found"; exit 1; };;
+    *) echo "MAPPER must be bwa or minimap2"; exit 1;; esac
+[[ "$FLANK" =~ ^[0-9]+$ ]] && (( FLANK >= 100 )) || { echo "FLANK must be a number >= 100"; exit 1; }
 # the cluster grouping step uses gawk-only features; with mawk it silently finds no loci
 if ! awk --version 2>/dev/null | grep -q "GNU Awk"; then echo "awk is not GNU awk (gawk): install gawk"; exit 1; fi
 
@@ -103,54 +112,70 @@ if [[ "$STAGE" == all || "$STAGE" == prep ]]; then
 # preparing left flanks
 
 echo clustering coordinates
-sort -k1,1 -k2,2n $sp1-$SINEname.bed | bedtools cluster -d 300 -i - > $sp1-"$SINEname"_clust.bed
-uniq -f6 -u $sp1-"$SINEname"_clust.bed > $sp1-"$SINEname"_uniq.bed # SINE loci at distance more than 300bp from each other 
-uniq -f6 -D $sp1-"$SINEname"_clust.bed > $sp1-"$SINEname"_clusters.bed # SINE loci that are within 300 bp from each other
-sort -k1,1 -k2,2n $sp2-$SINEname.bed | bedtools cluster -d 300 -i - > $sp2-"$SINEname"_clust.bed
+sort -k1,1 -k2,2n $sp1-$SINEname.bed | bedtools cluster -d $FLANK -i - > $sp1-"$SINEname"_clust.bed
+uniq -f6 -u $sp1-"$SINEname"_clust.bed > $sp1-"$SINEname"_uniq.bed # SINE loci at distance more than FLANK bp from each other
+uniq -f6 -D $sp1-"$SINEname"_clust.bed > $sp1-"$SINEname"_clusters.bed # SINE loci that are within FLANK bp from each other
+sort -k1,1 -k2,2n $sp2-$SINEname.bed | bedtools cluster -d $FLANK -i - > $sp2-"$SINEname"_clust.bed
 uniq -f6 -u $sp2-"$SINEname"_clust.bed > $sp2-"$SINEname"_uniq.bed
 uniq -f6 -D $sp2-"$SINEname"_clust.bed > $sp2-"$SINEname"_clusters.bed
 
-echo "creating 300bp flanks ONLY for SINE copies more than 300 bp apart" 
-bedtools flank -s -i $sp1-"$SINEname"_uniq.bed -g $1.fai -l 300 -r 0 > "$sp1"_flanks_300.bed # creating 300bp left flanks for all SINE loci
-bedtools getfasta -s -bed "$sp1"_flanks_300.bed -fi $1 > "$sp1"_flanks_300.bnk
-bedtools flank -s -i $sp2-"$SINEname"_uniq.bed -g $2.fai -l 300 -r 0 > "$sp2"_flanks_300.bed
-bedtools getfasta -s -bed "$sp2"_flanks_300.bed -fi $2 > "$sp2"_flanks_300.bnk
+echo "creating ${FLANK}bp flanks ONLY for SINE copies more than $FLANK bp apart"
+for sp in $sp1 $sp2; do
+    g=$1; [[ "$sp" == "$sp2" ]] && g=$2
+    bedtools flank -s -i $sp-"$SINEname"_uniq.bed -g $g.fai -l $FLANK -r 0 > "$sp"_flanks_$FLANK.bed # left flanks of all SINE loci
+    bedtools getfasta -s -bed "$sp"_flanks_$FLANK.bed -fi $g > "$sp"_flanks_$FLANK.bnk
+    if [[ "$BOTHFLANKS" == 1 ]]; then
+        # right flanks, named by the left flank of the same copy (the name the left-flank hits carry)
+        awk -v F=$FLANK 'BEGIN {OFS="\t"} NR==FNR {len[$1]=$2; next}
+         {if ($6=="+") {ls=($2>F)?$2-F:0; le=$2; rs=$3; re=($3+F<len[$1])?$3+F:len[$1]}
+          else {ls=$3; le=($3+F<len[$1])?$3+F:len[$1]; rs=($2>F)?$2-F:0; re=$2}
+          if (le>ls && re>rs) print $1, rs, re, $1":"ls"-"le"("$6")", 0, $6}' $g.fai $sp-"$SINEname"_uniq.bed > "$sp"_rflanks_$FLANK.bed
+        bedtools getfasta -s -name -bed "$sp"_rflanks_$FLANK.bed -fi $g | sed '/^>/s/::.*//' > "$sp"_rflanks_$FLANK.bnk
+    fi
+done
 
-# mapping left flanks sequences with bwa mem 
+# mapping flank sequences (bwa mem, or minimap2 with MAPPER=minimap2); hits to BED: target, start, end,
+# flank name, MAPQ/LENGTH/AS, strand (SAM records with fewer than 100 bases of SEQ are left out)
+map_flanks() {  # $1: genome, $2: flank FASTA, $3: output prefix (writes $3.sam and $3.bed)
+    if [ -f "$3.sam" ]; then echo "$3.sam found"; else
+        echo "mapping $2 on $1 ($MAPPER)"
+        if [[ "$MAPPER" == minimap2 ]]; then minimap2 -a --secondary=no -t $THREADS $MM2_OPTS "$1" "$2" > "$3.sam"
+        else bwa mem -t $THREADS "$1" "$2" > "$3.sam"; fi
+    fi
+    sam2bed < "$3.sam" | awk '{if (length($12)>99) print $1,$2,$3,$4,"MAPQ="$5",LENGTH="length($12)","$16,$6}' |
+     awk '{sub(/:i:/,"=",$5)}1' OFS="\t" | bedtools sort -i > "$3.bed"
+}
 
-echo "checking if bwa index exists"
-bwaIndexsp1=$(echo $1.sa)
-bwaIndexsp2=$(echo $2.sa)
+# BOTHFLANKS=1: keep a left-flank hit only where the right flank of the same copy has a hit on the same target
+# sequence and strand, -30 to SINElength + 100 bp downstream of the left-flank hit (in the flank orientation)
+both_flanks() {  # $1: left-flank hits BED (filtered in place), $2: right-flank hits BED
+    awk -v M=$((SINElength+100)) 'BEGIN {OFS="\t"} NR==FNR {r[$4]=r[$4] " " $1"|"$2"|"$3"|"$6; next}
+     {n=split(r[$4], h, " "); ok=0
+      for (i=1; i<=n; i++) {split(h[i], x, "|"); if (x[1]!=$1 || x[4]!=$6) continue
+       d=($6=="+") ? x[2]-$3 : $2-x[3]; if (d>=-30 && d<=M) ok=1}
+      if (ok) print; else bad++}
+     END {print FILENAME ": " bad+0 " left-flank hits without a matching right-flank hit removed" > "/dev/stderr"}' "$2" "$1" > "$1.tmp" &&
+     mv "$1.tmp" "$1"
+}
 
-if [ -f "$bwaIndexsp1" ]; then echo $1 bwa index found
-    else echo indexing $1
-    bwa index $1
+if [[ "$MAPPER" == bwa || "$RESCUE" == 1 || "$NEST" == 1 ]]; then
+    for g in $1 $2; do
+        if [ -f "$g.sa" ]; then echo $g bwa index found; else echo indexing $g; bwa index $g; fi
+    done
 fi
-
-if [ -f "$bwaIndexsp2" ]; then echo $2 bwa index found
-    else echo indexing $2
-    bwa index $2
+sfx=""; [[ "$MAPPER" == minimap2 ]] && sfx=".mm2"
+map_flanks $1 "$sp2"_flanks_$FLANK.bnk "$sp2"_flanks-$sp1$sfx
+map_flanks $2 "$sp1"_flanks_$FLANK.bnk "$sp1"_flanks-$sp2$sfx
+if [[ "$BOTHFLANKS" == 1 ]]; then
+    map_flanks $1 "$sp2"_rflanks_$FLANK.bnk "$sp2"_rflanks-$sp1$sfx
+    map_flanks $2 "$sp1"_rflanks_$FLANK.bnk "$sp1"_rflanks-$sp2$sfx
+    both_flanks "$sp2"_flanks-$sp1$sfx.bed "$sp2"_rflanks-$sp1$sfx.bed
+    both_flanks "$sp1"_flanks-$sp2$sfx.bed "$sp1"_rflanks-$sp2$sfx.bed
 fi
+if [[ -n "$sfx" ]]; then cp "$sp2"_flanks-$sp1$sfx.bed "$sp2"_flanks-$sp1.bed; cp "$sp1"_flanks-$sp2$sfx.bed "$sp1"_flanks-$sp2.bed; fi
+echo mapping complete
 
-SAMsp1=$(echo "$sp2"_flanks-$sp1.sam)
-SAMsp2=$(echo "$sp1"_flanks-$sp2.sam)
-
-if [ -f "$SAMsp1" ]; then echo $1 sam file found
-    else echo mapping $sp2 flanks on $sp1 genome
-    bwa mem -t $THREADS $1 "$sp2"_flanks_300.bnk > "$sp2"_flanks-$sp1.sam
-    sam2bed < "$sp2"_flanks-$sp1.sam | awk '{if (length($12)>99) print $1,$2,$3,$4,"MAPQ="$5",LENGTH="length($12)","$16,$6}' |
-     awk '{sub(/:i:/,"=",$5)}1' OFS="\t" | bedtools sort -i > "$sp2"_flanks-$sp1.bed
-fi
-
-if [ -f "$SAMsp2" ]; then echo $2 sam file found
-    else echo mapping $sp1 flanks on $sp2 genome
-    bwa mem -t $THREADS $2 "$sp1"_flanks_300.bnk > "$sp1"_flanks-$sp2.sam
-    sam2bed < "$sp1"_flanks-$sp2.sam | awk '{if (length($12)>99) print $1,$2,$3,$4,"MAPQ="$5",LENGTH="length($12)","$16,$6}' |
-     awk '{sub(/:i:/,"=",$5)}1' OFS="\t" | bedtools sort -i > "$sp1"_flanks-$sp2.bed
-    echo mapping complete
-fi
-
-slop=$((SINElength+300))
+slop=$((SINElength+FLANK))
 
 echo "preparing coordinates"
 
@@ -361,7 +386,7 @@ make_clusters() {
 }
 
 # bank mode: the reference row of a cluster is the consensus of the annotated copy at its windows' insertion
-# junction (window start + 300 on +, end - 300 on -; nearest copy within 300 bp); when the loci carry different
+# junction (window start + FLANK on +, end - FLANK on -; nearest copy within FLANK bp); when the loci carry different
 # labels, the longest reference is used. A copy more than 10 % longer than its labelled consensus (e.g. a
 # composite copy whose votes went to a unit it contains) gets the container consensus closest to its length.
 # Without a copy at any junction: the longest consensus of the bank.
@@ -370,12 +395,12 @@ pick_refs() {
     grep -H '^>' *.cl | awk '{f=$0; sub(/:>.*/,"",f); h=$0; sub(/^[^>]*>/,"",h); sub(/::.*/,"",h)
       if (match(h, /^(.*):([0-9]+)-([0-9]+)\(([+-])\)$/, m)) print m[1]"\t"m[2]"\t"m[3]"\t"f"|"h"\t0\t"m[4]}' > win.bed
     bedtools intersect -a win.bed -b "$COPIES" -wa -wb 2> /dev/null |
-     awk -F'\t' -v L="$REFDIR/lengths.tsv" -v CT="$REFDIR/containers.tsv" \
+     awk -F'\t' -v F=$FLANK -v L="$REFDIR/lengths.tsv" -v CT="$REFDIR/containers.tsv" \
       -v fb="$(sort -k2,2nr "$REFDIR/lengths.tsv" | head -n1 | cut -f1)" '
       BEGIN {while ((getline l < L) > 0) {split(l, x, "\t"); len[x[1]]=x[2]}
              while ((getline l < CT) > 0) {split(l, x, "\t"); cont[x[1]]=cont[x[1]] " " x[2]}}
-      {d=($6=="+") ? $8-($2+300) : ($3-300)-$9; if (d<0) d=-d; if ($6!=$12) d+=1000
-       if (d<=300 && (!($4 in best) || d<best[$4])) {best[$4]=d; lab[$4]=$10; cl[$4]=$9-$8}}
+      {d=($6=="+") ? $8-($2+F) : ($3-F)-$9; if (d<0) d=-d; if ($6!=$12) d+=1000
+       if (d<=F && (!($4 in best) || d<best[$4])) {best[$4]=d; lab[$4]=$10; cl[$4]=$9-$8}}
       END {for (w in lab) {r=lab[w]; shown=r
             if (cl[w] > 1.1*len[r] && (r in cont)) {n=split(cont[r], y, " "); b=r
              for (i=1; i<=n; i++) {e1=len[y[i]]-cl[w]; e0=len[b]-cl[w]; if ((e1<0?-e1:e1) < (e0<0?-e0:e0)) b=y[i]}
@@ -520,11 +545,11 @@ if [[ "$RESCUE" == 1 ]]; then
     echo "rescuing unresolved multi-copy clusters with both flanks"
     touch "$sp1-$sp2"_multi "$sp1-$sp2"_poly
     "$PYTHON" "$RESCUE_PY" prepare --clusters "$sp1-$sp2"_multi "$sp1-$sp2"_poly --resolved statpairs \
-     --copies "$sp1=$sp1-${SINEname}_uniq.bed" "$sp2=$sp2-${SINEname}_uniq.bed" --genome "$sp1=$1" "$sp2=$2" --sine-length $SINElength --out rescue
+     --copies "$sp1=$sp1-${SINEname}_uniq.bed" "$sp2=$sp2-${SINEname}_uniq.bed" --genome "$sp1=$1" "$sp2=$2" --sine-length $SINElength --flank $FLANK --out rescue
     [ -s rescue_"$sp1".fa ] && bwa mem -a -t $THREADS $2 rescue_"$sp1".fa > rescue_"$sp1".sam
     [ -s rescue_"$sp2".fa ] && bwa mem -a -t $THREADS $1 rescue_"$sp2".fa > rescue_"$sp2".sam
     "$PYTHON" "$RESCUE_PY" resolve --prep rescue --sam "$sp1=rescue_$sp1.sam" "$sp2=rescue_$sp2.sam" \
-     --genome "$sp1=$1" "$sp2=$2" --sine-length $SINElength --out "$sp1-$sp2"_rescue --report rescue_"$sp1-$sp2".tsv
+     --genome "$sp1=$1" "$sp2=$2" --sine-length $SINElength --flank $FLANK --out "$sp1-$sp2"_rescue --report rescue_"$sp1-$sp2".tsv
     awk 'NR%100==1{x="RPART"++i;}{print > x}' "$sp1-$sp2"_rescue
     for i in RPART*; do [ -f "$i" ] || continue
         run_batch "$i" align_doubles
@@ -595,14 +620,14 @@ if [[ "$NEST" == 1 ]]; then
         for sp in "$sp1" "$sp2"; do
             g=$1; [[ "$sp" == "$sp2" ]] && g=$2
             [[ -s nest_"$sp".loci.tsv ]] || "$PYTHON" "$NEST_PY" scan --genome "$g" --copies "$sp-$SINEname".bed \
-                --library "$SINEfa" -o nest_"$sp" --cpu "$THREADS"
+                --library "$SINEfa" -o nest_"$sp" --close $FLANK --cpu "$THREADS"
         done
         "$PYTHON" "$NEST_PY" orth --a "$sp1=$1" --b "$sp2=$2" --scan nest_"$sp1" -o nested_"$sp1"-in-"$sp2".tsv \
-            --sine-length "$SINElength" --threads "$THREADS"
+            --sine-length "$SINElength" --flank $FLANK --threads "$THREADS"
         "$PYTHON" "$NEST_PY" orth --a "$sp2=$2" --b "$sp1=$1" --scan nest_"$sp2" -o nested_"$sp2"-in-"$sp1".tsv \
-            --sine-length "$SINElength" --threads "$THREADS"
+            --sine-length "$SINElength" --flank $FLANK --threads "$THREADS"
         "$PYTHON" "$NEST_PY" supersede orth_"$sp1"-"$sp2".tsv --scan "$sp1=nest_$sp1" "$sp2=nest_$sp2" \
-            --nested nested_"$sp1"-in-"$sp2".tsv nested_"$sp2"-in-"$sp1".tsv -o orth.tmp \
+            --nested nested_"$sp1"-in-"$sp2".tsv nested_"$sp2"-in-"$sp1".tsv --flank $FLANK -o orth.tmp \
             && mv orth.tmp orth_"$sp1"-"$sp2".tsv && mv orth.tmp.superseded orth_"$sp1"-"$sp2".superseded.tsv
         tail -n +2 -q nested_"$sp1"-in-"$sp2".tsv nested_"$sp2"-in-"$sp1".tsv >> orth_"$sp1"-"$sp2".tsv
     else

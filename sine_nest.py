@@ -564,7 +564,7 @@ def cmd_supersede(args):
             m = re.match(r'^(.*):(\d+)-(\d+)\(([+-])\)$', r[k])
             if m:
                 lens[int(m.group(3)) - int(m.group(2))] += 1
-    slop = lens.most_common(1)[0][0] - 300 if lens else 0
+    slop = lens.most_common(1)[0][0] - args.flank if lens else 0
     def _anchor(locus, anchor):
         m = re.match(r'^(.*):(\d+)-(\d+)\(([+-])\)$', locus)
         if anchor not in ('', None):
@@ -748,6 +748,7 @@ def main():
                    help='orth output(s) of the compound-locus test: outside nested loci, a flank-based row is '
                         'replaced only where these resolved the element')
     u.add_argument('-o', '--output', required=True)
+    u.add_argument('--flank', type=int, default=300, help='flank length of the run [300]')
     u.set_defaults(func=cmd_supersede)
     t = sub.add_parser('tint', help='TinT-style chronology from nesting events')
     t.add_argument('nest', nargs='+', help='PREFIX.nest.tsv file(s) from scan')

@@ -121,6 +121,8 @@ def parse_copy_id(cid):
 # ── prepare ────────────────────────────────────────────────────────────────────
 
 def cmd_prepare(args):
+    global FLANK
+    FLANK = args.flank
     genomes = {k: Fasta(v) for k, v in kv(args.genome, '--genome').items()}
     copies = kv(args.copies, '--copies')
     if len(genomes) != 2 or set(genomes) != set(copies):
@@ -259,6 +261,8 @@ def local_align(q, t, k=11, band=25):
 
 
 def cmd_resolve(args):
+    global FLANK
+    FLANK = args.flank
     genomes = {k: Fasta(v) for k, v in kv(args.genome, '--genome').items()}
     sams = kv(args.sam, '--sam')
     sp_list = list(genomes)
@@ -475,6 +479,7 @@ def main():
     p.add_argument('--clusters', nargs='+', required=True, help='<sp1>-<sp2>_multi and _poly cluster files')
     p.add_argument('--resolved', help='statpairs of the run (loci that already have a final alignment)')
     p.add_argument('--sine-length', type=int, required=True)
+    p.add_argument('--flank', type=int, default=300, help='flank length [300]')
     p.add_argument('--copies', nargs=2, required=True, metavar='SP=BED', help='the *_uniq.bed copies of both species')
     p.add_argument('--genome', nargs=2, required=True, metavar='SP=FASTA', help='both genomes (with .fai)')
     p.add_argument('--out', required=True, help='output prefix')
@@ -486,6 +491,7 @@ def main():
                    help='bwa mem -a output of the flanks of species SP mapped to the other genome')
     r.add_argument('--genome', nargs=2, required=True, metavar='SP=FASTA', help='genome 1 first (pairs are written in this order)')
     r.add_argument('--sine-length', type=int, required=True)
+    r.add_argument('--flank', type=int, default=300, help='flank length [300]')
     r.add_argument('--anchors', type=int, default=10,
                    help='best hits of each flank used as anchors to search the other flank next to [10]')
     r.add_argument('--margin', type=int, default=20,
