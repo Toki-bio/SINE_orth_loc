@@ -7,14 +7,22 @@ Usage: compare_real.py --pair sp1 sp2 --chunks DIR --beds DIR RUN_DIR [RUN_DIR .
   --beds    directory with <sp>-*.bed, the input copies (column 6 strand)
 Only the main flank-mapping rows (clusters C<n>R, status SINE/PM/MP) are compared; rescue (M) and nested (N) rows
 are left aside. A row is checked on the genome that carries the SINE (both genomes for SINE rows): the copy whose
-junction is the row's anchor (within 40 bp) must lift to within 50 bp of the row's anchor in the other genome.
+junction is the row's junction (within 40 bp; junction = window start + FLANK, see rows_of) must lift to within 50 bp
+of the row's junction in the other genome.
 Per run: rows, agree / disagree / untested; then rows shared by runs and rows found by one run only, with the
-same check, and rows where two runs pair one locus with different partners."""
-import argparse, bisect, collections, csv, glob, os, re
+same check, and rows where two runs pair one locus with different partners.
+--out DIR: also write DIR/loci.tsv (one line per locus that differs between runs: the category, the check, and the
+alignment name of that locus in every run) and DIR/<category>/<run>/aln_<sp1>-<sp2>_<type>.aln.gz, small bundles with
+only those alignments, to open in sine_loci_browser.html. Categories: disagree (some run's row disagrees with the lift),
+partner (runs pair the locus with different loci), status (runs give different statuses), only_<run> (one run only).
+For a run without a row at the locus, its alignments whose window holds the locus are taken from all its bundles
+(rejected ones too) and named in loci.tsv with a leading "~"."""
+import argparse, bisect, collections, csv, glob, gzip, os, re, sys
 ap = argparse.ArgumentParser()
 ap.add_argument('--pair', nargs=2, required=True)
 ap.add_argument('--chunks', required=True)
 ap.add_argument('--beds', required=True)
+ap.add_argument('--out')
 ap.add_argument('runs', nargs='+')
 a = ap.parse_args()
 A, B = a.pair
@@ -49,16 +57,27 @@ for q, t in ((A, B), (B, A)):
     lift[q] = m
 
 def rows_of(run):
+    """rows as (status, A side, B side, alignment); a side = (chrom, junction, sine). The junction is the anchor
+    column, unless it lies > 50 bp from the window start + FLANK (+) or end - FLANK (-) (FLANK = the run's most
+    common anchor offset): about 5 % of anchors lie inside the flank by an amount that changes with FLANK, and then
+    the window position is used."""
     f = glob.glob(os.path.join(run, f'orth_{A}-{B}.tsv'))[0]
+    rows = [r for r in csv.DictReader(open(f), delimiter='\t')
+            if r['cluster'].startswith('C') and r['status'] in ('SINE', 'PM', 'MP') and r['anchor1'] and r['anchor2']]
+    off = collections.Counter()
+    for r in rows:
+        m = LOC.match(r['locus1'])
+        off[int(r['anchor1']) - int(m.group(2)) if m.group(4) == '+' else int(m.group(3)) - int(r['anchor1'])] += 1
+    F = off.most_common(1)[0][0]
+    print(f'{os.path.basename(os.path.normpath(run))}: FLANK {F}', file=sys.stderr)
     out = []
-    for r in csv.DictReader(open(f), delimiter='\t'):
-        if not r['cluster'].startswith('C') or r['status'] not in ('SINE', 'PM', 'MP'): continue
-        if not r['anchor1'] or not r['anchor2']: continue
+    for r in rows:
         side = {}
         for k in ('1', '2'):
-            c = r['locus' + k].rsplit(':', 1)[0]
-            side[r['species' + k]] = (c, int(r['anchor' + k]), r['sine' + k])
-        if A in side and B in side: out.append((r['status'], side[A], side[B]))
+            c, s, e, st = LOC.match(r['locus' + k]).groups()
+            w = int(s) + F if st == '+' else int(e) - F; x = int(r['anchor' + k])
+            side[r['species' + k]] = (c, x if abs(x - w) <= 50 else w, r['sine' + k])
+        if A in side and B in side: out.append((r['status'], side[A], side[B], r['alignment']))
     return out
 
 def check(sa, sb):
@@ -105,3 +124,75 @@ for n in names:
         for f in found:
             if f and f[0] != r[0]: status += 1; break
     print(n, only['n'], only['agree'], only['disagree'], only['untested'], partner, status, sep='\t')
+
+if a.out:
+    # loci across runs: rows matched on the A-side anchor (within TOL_MATCH), first row of each run kept
+    loci = []; lindex = collections.defaultdict(list)
+    for n in names:
+        for r in runs[n]:
+            hit = None
+            for k in ((r[1][0], r[1][1] // 100 + o) for o in (-1, 0, 1)):
+                for L in lindex.get(k, []):
+                    if abs(L['a'][1] - r[1][1]) <= TOL_MATCH: hit = L; break
+                if hit: break
+            if not hit:
+                hit = {'a': r[1], 'rows': {}}; loci.append(hit); lindex[key(r[1])].append(hit)
+            hit['rows'].setdefault(n, r)
+    def cats(L):
+        rs = L['rows']; c = []
+        if any(check(r[1], r[2]) == 'disagree' for r in rs.values()): c.append('disagree')
+        bs = [r[2] for r in rs.values()]
+        if any(b[0] != bs[0][0] or abs(b[1] - bs[0][1]) > TOL_MATCH for b in bs): c.append('partner')
+        if len({r[0] for r in rs.values()}) > 1: c.append('status')
+        if len(rs) == 1: c.append('only_' + next(iter(rs)))
+        return c
+    # every alignment header of every run: window on the A genome -> (alignment name, bundle type)
+    HDR = re.compile(r'^>(.*):(\d+)-(\d+)\([+-]\)')
+    windows = {}
+    for run in a.runs:
+        n = os.path.basename(os.path.normpath(run)); d = collections.defaultdict(list)
+        for b in glob.glob(os.path.join(run, f'aln_{A}-{B}_*.aln.gz')):
+            t = b.rsplit('_', 1)[1].split('.')[0]; name = None
+            for l in gzip.open(b, 'rt'):
+                if l.startswith('##FILE '): name = l[7:].rstrip('\n')
+                elif l.startswith('>') and name:
+                    m = HDR.match(l)
+                    if m and m.group(1) in junc[A]: d[m.group(1)].append((int(m.group(2)), int(m.group(3)), name, t))
+        for c in d: d[c].sort()
+        windows[n] = d
+    def at(n, sa):
+        L = windows[n].get(sa[0], []); i = bisect.bisect_left(L, (sa[1] - 5000,)); out = []
+        while i < len(L) and L[i][0] <= sa[1]:
+            if L[i][1] >= sa[1] and (L[i][2], L[i][3]) not in out: out.append((L[i][2], L[i][3]))
+            i += 1
+        return out
+    want = collections.defaultdict(set)        # (category, run) -> alignment names
+    os.makedirs(a.out, exist_ok=True)
+    with open(os.path.join(a.out, 'loci.tsv'), 'w') as fo:
+        fo.write('\t'.join(['locus', 'category', A + '_anchor', 'check'] + names) + '\n')
+        k = 0
+        for L in loci:
+            c = cats(L)
+            if not c: continue
+            k += 1; cells = []
+            for n in names:
+                r = L['rows'].get(n)
+                if r:
+                    al = [r[3]]; cells.append(f"{r[0]} {r[2][0]}:{r[2][1]} {r[3]} ({check(r[1], r[2])})")
+                else:
+                    al = [x[0] for x in at(n, L['a'])]; cells.append('~' + ','.join(al) if al else '-')
+                for x in c:
+                    for nm in al: want[(x, n)].add(nm)
+            chk = ','.join(sorted({check(r[1], r[2]) for r in L['rows'].values()}))
+            fo.write('\t'.join([f'L{k}', ','.join(c), f"{L['a'][0]}:{L['a'][1]}", chk] + cells) + '\n')
+    for (x, n), nms in sorted(want.items()):
+        run = next(r for r in a.runs if os.path.basename(os.path.normpath(r)) == n)
+        d = os.path.join(a.out, x, n); os.makedirs(d, exist_ok=True); got = 0
+        for b in glob.glob(os.path.join(run, f'aln_{A}-{B}_*.aln.gz')):
+            o = gzip.open(os.path.join(d, os.path.basename(b)), 'wt'); o.write('##SINE_orth_loc bundle v1\n'); p = False
+            for l in gzip.open(b, 'rt'):
+                if l.startswith('##FILE '): p = l[7:].rstrip('\n') in nms; got += p
+                if p: o.write(l)
+            o.close()
+        print(f'{x}\t{n}\t{got} alignments', file=sys.stderr)
+    print(f'\n{k} loci written to {a.out}/loci.tsv')
