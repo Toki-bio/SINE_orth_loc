@@ -46,6 +46,42 @@ On a cluster, set `-t` to the number of allocated cores and `--scratch` to node-
 storage (defaults to `$SLURM_TMPDIR` or `$TMPDIR` when set). Use `--force` to reuse an
 existing output directory from a batch job.
 
+## Bank mode: SINE loci from a SINEderella run
+
+For genomes with many subfamilies and composite SINEs (e.g. *Rhinolophus*, 21 consensi of
+105-608 bp), the SINE loci are taken from SINEderella's per-copy list, not searched again, and
+one run covers the whole bank:
+
+    sinederella_bed.py RUN_A -o aaa-BANK.bed     # RUN_*: SINEderella result directories
+    sinederella_bed.py RUN_B -o bbb-BANK.bed     # (loci_verdict.tsv, family_view/)
+    SINE_orth_loc.bash aaa.bnk bbb.bnk BANK.fa   # BANK.fa: the bank both runs used
+
+Bank mode starts when the consensus file has more than one sequence. It changes three things:
+
+- **Copies.** `sinederella_bed.py` keeps copies with verdict `SINE` (assigned to a subfamily, flanks
+  unique) and partial copies (`family_view/partial_copies.tsv`, status `partial`; label
+  `<consensus>:<a>-<b>`, the span they cover). Grey and other not-SINE copies are left out.
+  Overlapping copies become one locus.
+- **Reference row.** Every alignment gets the consensus of its own copy (or the covered span of a
+  partial copy) as reference row, named `>BANK`. A copy at least 10 % longer than its labelled
+  consensus gets the longer bank consensus that contains it and comes closest to its length
+  (a composite copy whose votes went to a unit inside it). When the two loci carry different labels,
+  the longer reference is used. `refs_<sp1>-<sp2>.tsv` lists the reference and the labels per
+  cluster. Windows are sized for the longest consensus.
+- **SINE identity threshold.** `ComPair.sh` needs > 100 identical nt between the two SINEs and with
+  the reference (`CP_SINE_NID`). With `CP_SINE_FRAC` (bank mode default 50) the threshold is lowered
+  to that percentage of the reference length when that is smaller, e.g. 52 nt for a 105 bp
+  consensus or a 105 bp partial span. Consensi of 200 bp or more keep 100 nt.
+
+Toy test (`tests/simulate_bank.py`: consensi of 110, 250, 360 = 110 + 250 and 600 bp; full,
+partial and relabelled copies, shared or in one genome; 330 events):
+
+    python3 tests/simulate_bank.py
+    bash SINE_orth_loc.bash aaa.bnk bbb.bnk bank.fa && python3 tests/score_bank.py . .
+
+Bank mode: 330/330 events with the right status, no wrong pairs. The same toy run with the 600 bp
+consensus alone (`D.fa`, `aaa-D.bed`, `bbb-D.bed`): 70/330.
+
 ## Multi-copy loci (multimappers)
 
 When a flank matches several places, loci join into clusters of 3–10 (multi) or more
