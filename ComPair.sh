@@ -17,6 +17,8 @@ CP_FLANK_NID=${CP_FLANK_NID:-65}    # min identical nt in left flank
 CP_FLANK_PID=${CP_FLANK_PID:-65}    # min % identity of left and right flanks
 CP_SINE_PID=${CP_SINE_PID:-65}      # SINE in both: min % identity between the two SINEs
 CP_SINE_NID=${CP_SINE_NID:-100}     # SINE in both: min identical nt between SINEs and with consensus
+CP_SINE_FRAC=${CP_SINE_FRAC:-0}     # >0: CP_SINE_NID lowered to this % of the reference row length when that is smaller
+                                     # (bank mode: short consensi and partial-copy spans; 0 = published fixed 100 nt)
 CP_CUT_PID=${CP_CUT_PID:-70}        # SINE in one: min % identity of the trimmed right flank
 CP_CUT_NID=${CP_CUT_NID:-120}       # SINE in one: min identical nt in the trimmed right flank
 CP_INDEL_MIN=${CP_INDEL_MIN:-50}    # right flank: one-sided gap runs >= this are masked before re-testing (0: off)
@@ -114,7 +116,13 @@ ST=$(awk -F. 'NR==8 {print $1}' $bank.stats) # number of identical bp between se
 
 if [[ $LFcp -gt $CP_FLANK_NID && $LF -gt $CP_FLANK_LEN && $FL -gt $CP_FLANK_PID ]] # check if FLANK is good
     then echo left flank good, next check SINE and right flank
-	if [[ $OneTwo -gt $CP_SINE_PID && $SL -gt $CP_SINE_NID && $SO -gt $CP_SINE_NID && $ST -gt $CP_SINE_NID ]]
+	NIDs=$CP_SINE_NID
+	if [[ "$CP_SINE_FRAC" -gt 0 ]]; then
+	    REFlen=$(seqkit range -r -1:-1 -w 0 $bank | awk 'NR==2 {gsub(/-/,""); print length}')
+	    (( REFlen * CP_SINE_FRAC / 100 < NIDs )) && NIDs=$(( REFlen * CP_SINE_FRAC / 100 ))
+	    echo "length-scaled SINE identity threshold: $NIDs nt (reference $REFlen nt)"
+	fi
+	if [[ $OneTwo -gt $CP_SINE_PID && $SL -gt $NIDs && $SO -gt $NIDs && $ST -gt $NIDs ]]
 	    then echo SINE in both, next check right flank
 		if [[ $RFlength -gt $CP_FLANK_LEN && $FR -gt $CP_FLANK_PID ]]
 		    then echo right flank is good, homozygous copy; mv $bank $bank.SINE; status=$(echo "SINE")

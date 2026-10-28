@@ -46,11 +46,21 @@ fi
 if ! awk --version 2>/dev/null | grep -q "GNU Awk"; then echo "awk is not GNU awk (gawk): install gawk"; exit 1; fi
 
 seqkit seq -w 0 $3 > SINE.q # linearising SINE sequence
-SINElength=$(seqkit seq -w 0 $3 | awk 'NR==2 {print length}') # calculating SINE length
 SINEname="${3%.*}"
-# the multi stage finds the consensus row in alignments by this name
-if [[ "$(head -n1 "$3" | sed 's/^>//' | awk '{print $1}')" != "$SINEname" ]]; then
-    echo "SINE consensus header must equal the file name without extension (>$SINEname in $3)"; exit 1
+# Bank mode: $3 holds several consensi (e.g. a SINEderella bank). Column 4 of both BED files then names the
+# consensus of each copy ("subfam", or "subfam:a-b" for a partial copy covering positions a-b), and every
+# alignment gets the consensus (or span) of its own copy as reference row, named >$SINEname.
+BANK=$([[ $(grep -c '^>' "$3") -gt 1 ]] && echo 1 || echo 0)
+if [[ "$BANK" == 1 ]]; then
+    SINElength=$(seqkit fx2tab -n -l "$3" | awk -F'\t' '$2>m {m=$2} END {print m}') # longest consensus: window size
+    export CP_SINE_FRAC=${CP_SINE_FRAC:-50}
+    echo "bank mode: $(grep -c '^>' "$3") consensi, windows for $SINElength bp, CP_SINE_FRAC=$CP_SINE_FRAC"
+else
+    SINElength=$(seqkit seq -w 0 $3 | awk 'NR==2 {print length}') # calculating SINE length
+    # the multi stage finds the consensus row in alignments by this name
+    if [[ "$(head -n1 "$3" | sed 's/^>//' | awk '{print $1}')" != "$SINEname" ]]; then
+        echo "SINE consensus header must equal the file name without extension (>$SINEname in $3)"; exit 1
+    fi
 fi
 
 sp1="${1%.*}"
@@ -265,6 +275,28 @@ fi
 
 WD=$(pwd)
 SINEfa=$(readlink -f "$3")
+REFDIR="$WD/refs" COPIES="$WD/bank_copies.bed"
+if [[ "$BANK" == 1 ]]; then
+    # one reference file per bank consensus and per BED label (whole consensus, or the span a-b of it), header
+    # >$SINEname; containers.tsv: consensus X, longer consensus Y holding >= 80 % of the 16-mers of X (a unit in
+    # a composite), used when a copy is longer than the consensus it is labelled with (see pick_refs)
+    mkdir -p "$REFDIR"
+    cut -f1-6 $sp1-$SINEname.bed $sp2-$SINEname.bed > "$COPIES"
+    seqkit seq -w 0 "$3" | awk -v d="$REFDIR" -v n="$SINEname" -F'\t' '
+     FNR==NR {if (/^>/) {h=substr($1,2); sub(/[ \t].*/,"",h)} else {seq[h]=toupper($0); f=h; gsub(/[:\/]/,"_",f)
+              print ">" n "\n" seq[h] > (d "/" f ".fa"); print h "\t" length(seq[h]) > (d "/lengths.tsv")}; next}
+     FNR==1 {for (x in seq) for (y in seq) if (x != y && length(seq[y]) > length(seq[x])) {
+               t=0; k=0; for (i=1; i+15<=length(seq[x]); i++) {t++; if (index(seq[y], substr(seq[x], i, 16))) k++}
+               if (t && k >= 0.8*t) print x "\t" y > (d "/containers.tsv")}}
+     !($4 in done) && !($4 in seq) {done[$4]; l=$4; c=l; a=1; b=0
+      if (match(l, /^(.*):([0-9]+)-([0-9]+)$/, m)) {c=m[1]; a=m[2]; b=m[3]}
+      if (!(c in seq)) {print "bank mode: consensus " c " (BED label " l ") is not in the bank" > "/dev/stderr"; bad=1; next}
+      s=(b ? substr(seq[c], a, b-a+1) : seq[c]); f=l; gsub(/[:\/]/,"_",f)
+      print ">" n "\n" s > (d "/" f ".fa"); print l "\t" length(s) > (d "/lengths.tsv")}
+     END {exit bad}' - "$COPIES" || exit 1
+    sort -u -o "$REFDIR/lengths.tsv" "$REFDIR/lengths.tsv"; touch "$REFDIR/containers.tsv"
+    echo "bank mode: $(wc -l < "$REFDIR/lengths.tsv") reference rows in $REFDIR"
+fi
 cut -f1 "$1.fai" > "$WD/$sp1.chroms"
 # sequence sizes of both genomes: ComPair.sh reports loci whose window is clipped by a contig end as contig_end
 cut -f1,2 "$1.fai" "$2.fai" > "$WD/$sp1-$sp2.sizes"
@@ -284,7 +316,7 @@ SCRATCH=$(mktemp -d "${SCRATCH_DIR:-${SLURM_TMPDIR:-${TMPDIR:-$WD}}}/SINE_orth_l
 trap 'rm -rf "$SCRATCH"' EXIT
 BUNDLE="$WD/aln_${sp1}-${sp2}"
 for t in PM MP SINE rejected; do rm -f "${BUNDLE}_$t.aln.gz"; echo "##SINE_orth_loc bundle v1" > "${BUNDLE}_$t.aln"; done
-rm -f statcoords statpairs
+rm -f statcoords statpairs refs_chosen
 
 # each parallel ComPair.sh job writes its own *.stat file; merge them into "stat"
 # serially so concurrent appends cannot interleave (unsafe on NFS/Lustre)
@@ -321,9 +353,45 @@ make_clusters() {
       cName=$(echo $CurrCluster | awk '{print $1}')
       echo $CurrCluster |
        awk '{sub(/ /,"\n")}{gsub(/,>/,"\n>")}{gsub(/SeqStart/,"\n")} {print}' |
-       awk 'NR==1 {a=$0} NR!=1 {if ($0 ~ ">") {print $0"::"a} else print}' | cat - "$SINEfa" > "$cName".cl
+       awk 'NR==1 {a=$0} NR!=1 {if ($0 ~ ">") {print $0"::"a} else print}' > "$cName".cl
+      [[ "$BANK" == 1 ]] || cat "$SINEfa" >> "$cName".cl
       Lines=$(( $Lines - 1 ))
     done
+    [[ "$BANK" == 1 ]] && pick_refs
+}
+
+# bank mode: the reference row of a cluster is the consensus of the annotated copy at its windows' insertion
+# junction (window start + 300 on +, end - 300 on -; nearest copy within 300 bp); when the loci carry different
+# labels, the longest reference is used. A copy more than 10 % longer than its labelled consensus (e.g. a
+# composite copy whose votes went to a unit it contains) gets the container consensus closest to its length.
+# Without a copy at any junction: the longest consensus of the bank.
+# "$WD/refs_chosen": cluster, reference label, labels found (locus=label, or label>container when widened).
+pick_refs() {
+    grep -H '^>' *.cl | awk '{f=$0; sub(/:>.*/,"",f); h=$0; sub(/^[^>]*>/,"",h); sub(/::.*/,"",h)
+      if (match(h, /^(.*):([0-9]+)-([0-9]+)\(([+-])\)$/, m)) print m[1]"\t"m[2]"\t"m[3]"\t"f"|"h"\t0\t"m[4]}' > win.bed
+    bedtools intersect -a win.bed -b "$COPIES" -wa -wb 2> /dev/null |
+     awk -F'\t' -v L="$REFDIR/lengths.tsv" -v CT="$REFDIR/containers.tsv" \
+      -v fb="$(sort -k2,2nr "$REFDIR/lengths.tsv" | head -n1 | cut -f1)" '
+      BEGIN {while ((getline l < L) > 0) {split(l, x, "\t"); len[x[1]]=x[2]}
+             while ((getline l < CT) > 0) {split(l, x, "\t"); cont[x[1]]=cont[x[1]] " " x[2]}}
+      {d=($6=="+") ? $8-($2+300) : ($3-300)-$9; if (d<0) d=-d; if ($6!=$12) d+=1000
+       if (d<=300 && (!($4 in best) || d<best[$4])) {best[$4]=d; lab[$4]=$10; cl[$4]=$9-$8}}
+      END {for (w in lab) {r=lab[w]; shown=r
+            if (cl[w] > 1.1*len[r] && (r in cont)) {n=split(cont[r], y, " "); b=r
+             for (i=1; i<=n; i++) {e1=len[y[i]]-cl[w]; e0=len[b]-cl[w]; if ((e1<0?-e1:e1) < (e0<0?-e0:e0)) b=y[i]}
+             if (b != r) {lab[w]=b; shown=r ">" b}}
+            split(w, p, "|"); c=p[1]; sub(/\.cl$/,"",c); seen[c]=seen[c] (seen[c]=="" ? "" : ",") p[2]"="shown
+            if (!(c in ref) || len[lab[w]]>len[ref[c]]) ref[c]=lab[w]}
+           for (c in seen) print c"\t"ref[c]"\t"seen[c]
+           print "#fallback\t" fb}' > win.refs
+    fb=$(awk -F'\t' '$1=="#fallback" {print $2}' win.refs)
+    for f in *.cl; do
+        c=${f%.cl}; r=$(awk -F'\t' -v c="$c" '$1==c {print $2}' win.refs)
+        if [[ -z "$r" ]]; then r=$fb; printf '%s\t%s\t-\n' "$c" "$r" >> "$WD/refs_chosen"
+        else awk -F'\t' -v c="$c" '$1==c' win.refs >> "$WD/refs_chosen"; fi
+        x=$r; x=${x//:/_}; x=${x//\//_}; cat "$REFDIR/$x.fa" >> "$f"
+    done
+    rm -f win.bed win.refs
 }
 
 # run a per-batch function in a fresh scratch directory, then bundle and clean up
@@ -426,15 +494,15 @@ mv stat stat_multi_"$sp1"-"$sp2"
 fi
 if [[ "$STAGE" == align ]]; then
     for t in PM MP SINE rejected; do gzip -f "${BUNDLE}_$t.aln"; done
-    touch statcoords statpairs
+    touch statcoords statpairs refs_chosen
     echo "STAGE=align shard $SHARD done"
     exit 0
 fi
 if [[ "$STAGE" == finish ]]; then
     # merge the shards: stat files, coordinates and alignment bundles (one header per bundle)
     ls -d shard_*/ > /dev/null 2>&1 || { echo "STAGE=finish: no shard_*/ directories"; exit 1; }
-    for f in stat_doubles_"$sp1"-"$sp2" stat_multi_"$sp1"-"$sp2" statcoords statpairs; do
-        cat shard_*/"$f" > "$f"
+    for f in stat_doubles_"$sp1"-"$sp2" stat_multi_"$sp1"-"$sp2" statcoords statpairs refs_chosen; do
+        cat shard_*/"$f" > "$f" 2> /dev/null
     done
     for t in PM MP SINE rejected; do
         for z in shard_*/aln_"$sp1"-"$sp2"_$t.aln.gz; do zcat "$z" | tail -n +2; done >> "${BUNDLE}_$t.aln"
@@ -505,6 +573,12 @@ awk -v sp1=$sp1 -v sp2=$sp2 -F'\t' '
  function anchor(locus, ls,   m) {if (ls=="") return ""; match(locus, /:([0-9]+)-([0-9]+)\(([+-])\)$/, m)
      return (m[3]=="+") ? m[1]+ls : m[2]-ls}' \
  "$1.fai" stat_doubles_"$sp1"-"$sp2" stat_multi_"$sp1"-"$sp2" stat_rescue_"$sp1"-"$sp2" statpairs > orth_"$sp1"-"$sp2".tsv
+
+# bank mode: the reference row used for every cluster (labels: locus=BED label of the copy at each junction)
+if [[ "$BANK" == 1 ]]; then
+    { printf 'cluster	reference	labels
+'; sort -u refs_chosen; } > refs_"$sp1"-"$sp2".tsv
+fi
 
 # what became of every cluster: resolved (and how), rejected by ComPair.sh, or left unresolved
 echo "writing clusters_$sp1-$sp2.tsv"
