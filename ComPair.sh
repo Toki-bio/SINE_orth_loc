@@ -47,8 +47,6 @@ len=$(seqkit range -r -1:-1 -w 0 $bank | awk 'NR==2 { print length($0) }') # ali
 RF=$((len-RFlength)) # left coordinate of the right flank
 echo LF=$LF len=$len RF=$RF RFlength=$RFlength
 rm $bank.gaps
-# residues of each locus before the SINE start (insertion junction within its window): LS1, LS2
-read -r LS1 LS2 <<< "$(seqkit seq -w 0 $bank | awk -v lf=$LF '!/^>/ {n++; if (n<=2) {s=substr($0,1,lf); gsub(/-/,"",s); printf "%d ", length(s)}}')"
 
 #report problematic flanks length
 if [[ "$LF" -le "$CP_FLANK_LEN" ]]; then echo "Short FLANK! Trying to fix it"
@@ -57,6 +55,16 @@ if [[ "$LF" -le "$CP_FLANK_LEN" ]]; then echo "Short FLANK! Trying to fix it"
     mv $bank.temp $bank
     LF=$(seqkit range -r -1:-1 -w 0 $bank | awk -F '[^-]+' 'NR!=1 {print length($1)}') # recalculating new left flank coordinate
     echo new left flank $LF
+fi
+# residues of each locus before the SINE start (insertion junction within its window): LS1, LS2. From the alignment
+# (residues left of the reference row's first residue, after the short-flank fix above), unless <cluster>.off (bank
+# mode: the annotated copy's start within its window) names a row: that row's junction is its offset, and the other
+# row's is its residue count at the column where the first row reaches its offset (compair_flank.py junction). A
+# reference longer than the copy (partial copy, composite) can start anywhere in the left flank; the copy cannot.
+read -r LS1 LS2 <<< "$(seqkit seq -w 0 $bank | awk -v lf=$LF '!/^>/ {n++; if (n<=2) {s=substr($0,1,lf); gsub(/-/,"",s); printf "%d ", length(s)}}')"
+OFF="${bank%.cl.*}.off"
+if [[ -s "$OFF" ]]; then
+    j=$("$PY" "$HELPER" junction "$bank" "$OFF"); [[ "$j" =~ ^[0-9]+\ [0-9]+$ ]] && read -r LS1 LS2 <<< "$j"
 fi
 if [[ "$RFlength" -lt "$CP_FLANK_LEN" ]]; then echo "Short FRANK!"
     if at_edge; then

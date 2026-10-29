@@ -14,17 +14,21 @@ def ev(locus, anchor):
     c = locus.rsplit(":", 1)[0]; a = int(anchor)
     best = min(sites[c], key=lambda x: abs(x[0] - a), default=None)
     return best[1] if best and abs(best[0] - a) <= 40 else None
-res = collections.Counter(); got = {}
+res = collections.Counter(); got = {}; err = []
 for r in csv.DictReader(open(f"{run}/orth_aaa-bbb.tsv"), delimiter="\t"):
     if r["status"] not in ("SINE", "PM", "MP"): continue
     e1, e2 = ev(r["locus1"], r["anchor1"]), ev(r["locus2"], r["anchor2"])
     if not e1 or not e2: res["unmatched"] += 1; continue
     if e1 is not e2: res["wrong_pair"] += 1; continue
+    for k in ("1", "2"):   # anchor error against the true junction, each side of the matched row
+        err.append(abs(int(r["anchor" + k]) - int(e1[r["species" + k] + "_site"].rsplit(":", 1)[1])))
     p1 = e1["aaa"] if r["species1"] == "aaa" else e1["bbb"]; p2 = e1["bbb"] if r["species1"] == "aaa" else e1["aaa"]
     want = {("1", "1"): "SINE", ("1", "0"): "PM", ("0", "1"): "MP"}[(p1, p2)]
     ok = r["status"] == want; res["right_status" if ok else "wrong_status"] += 1
     got[e1["event"]] = got.get(e1["event"], False) or ok
 print("rows:", dict(res))
+if err: print(f"anchors: {len(err)}, exact {sum(e == 0 for e in err)}, within 5 bp {sum(e <= 5 for e in err)}, "
+              f"over 20 bp {sum(e > 20 for e in err)}, max {max(err)}, mean {sum(err) / len(err):.1f}")
 by = collections.defaultdict(collections.Counter)
 for t in truth:
     k = (t["class"], "both" if t["aaa"] == t["bbb"] == "1" else "one")

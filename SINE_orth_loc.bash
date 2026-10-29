@@ -361,7 +361,7 @@ collect_coords() {
 
 # append every alignment left in the current batch directory to the bundles
 bundle_batch() {
-    find . -maxdepth 1 -type f ! -name "*.fai" ! -name "*.stats" -print0 |
+    find . -maxdepth 1 -type f ! -name "*.fai" ! -name "*.stats" ! -name "*.off" -print0 |
      xargs -0 -r awk -v b="$BUNDLE" 'FNR==1 {n=FILENAME; sub(/^\.\//,"",n); t=n; sub(/.*\./,"",t)
       if (t!="PM" && t!="MP" && t!="SINE") t="rejected"; out=b"_"t".aln"; print "##FILE " n >> out}
       {print >> out}'
@@ -391,6 +391,8 @@ make_clusters() {
 # composite copy whose votes went to a unit it contains) gets the container consensus closest to its length.
 # Without a copy at any junction: the longest consensus of the bank.
 # "$WD/refs_chosen": cluster, reference label, labels found (locus=label, or label>container when widened).
+# <cluster>.off: locus, start of its annotated copy within the window (ComPair.sh takes the insertion junction
+# from it; see compair_flank.py junction).
 pick_refs() {
     grep -H '^>' *.cl | awk '{f=$0; sub(/:>.*/,"",f); h=$0; sub(/^[^>]*>/,"",h); sub(/::.*/,"",h)
       if (match(h, /^(.*):([0-9]+)-([0-9]+)\(([+-])\)$/, m)) print m[1]"\t"m[2]"\t"m[3]"\t"f"|"h"\t0\t"m[4]}' > win.bed
@@ -400,8 +402,9 @@ pick_refs() {
       BEGIN {while ((getline l < L) > 0) {split(l, x, "\t"); len[x[1]]=x[2]}
              while ((getline l < CT) > 0) {split(l, x, "\t"); cont[x[1]]=cont[x[1]] " " x[2]}}
       {d=($6=="+") ? $8-($2+F) : ($3-F)-$9; if (d<0) d=-d; if ($6!=$12) d+=1000
-       if (d<=F && (!($4 in best) || d<best[$4])) {best[$4]=d; lab[$4]=$10; cl[$4]=$9-$8}}
-      END {for (w in lab) {r=lab[w]; shown=r
+       if (d<=F && (!($4 in best) || d<best[$4])) {best[$4]=d; lab[$4]=$10; cl[$4]=$9-$8; off[$4]=($6=="+") ? $8-$2 : $3-$9}}
+      END {for (w in off) {split(w, p, "|"); c=p[1]; sub(/\.cl$/,"",c); print p[2] "\t" off[w] > (c ".off")}
+           for (w in lab) {r=lab[w]; shown=r
             if (cl[w] > 1.1*len[r] && (r in cont)) {n=split(cont[r], y, " "); b=r
              for (i=1; i<=n; i++) {e1=len[y[i]]-cl[w]; e0=len[b]-cl[w]; if ((e1<0?-e1:e1) < (e0<0?-e0:e0)) b=y[i]}
              if (b != r) {lab[w]=b; shown=r ">" b}}

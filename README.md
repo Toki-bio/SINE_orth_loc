@@ -71,6 +71,12 @@ Bank mode starts when the consensus file has more than one sequence. It changes 
   names the reference row of every locus (single mode: the consensus name; nested rows: the
   element); `refs_<sp1>-<sp2>.tsv` adds the labels of each cluster's copies. Windows are sized for
   the longest consensus.
+- **Insertion junction (`anchor1`, `anchor2`).** The junction of a locus whose annotated copy sits at
+  its window's junction is that copy's start (`<cluster>.off`, written with the reference); the other
+  locus gets the alignment column where the first reaches it. Without an annotated copy (single
+  mode, rescue windows) the junction is where the reference row's first residue aligns, measured
+  after ComPair's short-left-flank fix. A reference longer than the copy (partial copy, composite)
+  starts anywhere in the left flank; this put ~5 % of rsi–rfe anchors >50 bp off before 2026-10-29.
 - **SINE identity threshold.** `ComPair.sh` needs > 100 identical nt between the two SINEs and with
   the reference (`CP_SINE_NID`). With `CP_SINE_FRAC` (bank mode default 50) the threshold is lowered
   to that percentage of the reference length when that is smaller, e.g. 52 nt for a 105 bp

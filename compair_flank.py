@@ -12,6 +12,12 @@
       Prints the 0-based index of the first of the two loci whose window touches the start (0) or the
       end of its sequence, according to SIZES (a .fai or chrom<TAB>size file of both genomes); prints
       -1 if neither does. A window clipped at a contig end means the sequence is missing, not diverged.
+
+  compair_flank.py junction ALN OFF
+      Insertion junction of the first two loci as residues of each row left of the SINE start ("LS1 LS2"),
+      from OFF (locus<TAB>offset: the annotated copy's start within its window, written by SINE_orth_loc in
+      bank mode). A row named in OFF gets its offset; the other row gets its residue count at the alignment
+      column where the first row reaches its offset. Prints nothing when neither row is in OFF.
 """
 import re
 import sys
@@ -70,10 +76,39 @@ def edge(path, sizes_path):
     return -1
 
 
+def junction(path, off_path):
+    names, seqs = read_aln(path)
+    off = {}
+    with open(off_path) as fh:
+        for line in fh:
+            f = line.rstrip('\n').split('\t')
+            if len(f) == 2:
+                off[f[0]] = int(f[1])
+    ls = [off.get(n.split('::')[0]) for n in names]
+    if ls[0] is None and ls[1] is None:
+        return None
+    for i in (0, 1):
+        if ls[i] is None:
+            k = 1 - i
+            n, col = 0, len(seqs[k])          # column of the first SINE base of row k (its offset-th residue, 0-based)
+            for c, ch in enumerate(seqs[k]):
+                if ch != '-':
+                    if n == ls[k]:
+                        col = c
+                        break
+                    n += 1
+            ls[i] = sum(ch != '-' for ch in seqs[i][:col])
+    return ls
+
+
 def main():
     if len(sys.argv) < 3:
         sys.exit(__doc__)
-    if sys.argv[1] == 'mask':
+    if sys.argv[1] == 'junction':
+        ls = junction(sys.argv[2], sys.argv[3])
+        if ls is not None:
+            print(f'{ls[0]} {ls[1]}')
+    elif sys.argv[1] == 'mask':
         minrun = int(sys.argv[5]) if len(sys.argv) > 5 else 50
         pid, nid, cols, masked = mask(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), minrun)
         print(f'{int(pid)} {nid} {cols} {masked}')
