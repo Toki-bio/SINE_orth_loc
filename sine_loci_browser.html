@@ -407,7 +407,7 @@
   .ruler-row {
     display: flex;
     font-family: var(--font-mono);
-    font-size: 0.7em;
+    font-size: 1em;
     color: var(--text-dim);
     margin: 0 0 2px 0;
     padding: 0;
@@ -538,9 +538,9 @@
   <div class="sep"></div>
   <div id="blockSizeRow" style="display:flex;align-items:center;gap:5px;">
     <span style="font-size:11px;color:var(--text-dim);white-space:nowrap;">Block:</span>
-    <input type="range" id="blockSizeSlider" min="40" max="300" value="80"
+    <input type="range" id="blockSizeSlider" min="40" max="600" value="80"
            style="width:90px;cursor:pointer;" title="Characters per block">
-    <input type="number" id="blockSizeInput" min="40" max="300" value="80"
+    <input type="number" id="blockSizeInput" min="40" max="600" value="80"
            style="width:42px;font-size:11px;padding:2px 4px;border:1px solid var(--border);border-radius:3px;background:var(--surface2);"
            title="Characters per block">
     <button class="tb-btn" id="blockSizeScreenBtn" title="Fit block to screen width">Screen</button>
@@ -705,6 +705,7 @@ async function getFileText(f) {
 }
 
 const BLOCK_SIZE = 80;
+let blockManual = false;   // block size set by hand; otherwise it follows the window width (fitBlock)
 function getBlockSize() { return parseInt(document.getElementById('blockSizeSlider').value) || 80; }
 
 // ── Zoom ─────────────────────────────────────────────────────────────────────
@@ -951,17 +952,22 @@ document.getElementById('changedOnly').addEventListener('change', e => { changed
   const input  = document.getElementById('blockSizeInput');
 
   slider.addEventListener('input', () => {
+    blockManual = true;
     input.value = slider.value;
     if (viewMode === 'single' && filtered.length) renderAlignmentForCurrent();
   });
   input.addEventListener('change', () => {
-    const v = Math.max(40, Math.min(300, parseInt(input.value) || 80));
+    const v = Math.max(40, Math.min(600, parseInt(input.value) || 80));
+    blockManual = true;
     input.value = v;
     slider.value = v;
     if (viewMode === 'single' && filtered.length) renderAlignmentForCurrent();
   });
 
-  document.getElementById('blockSizeScreenBtn').addEventListener('click', () => {
+  document.getElementById('blockSizeScreenBtn').addEventListener('click', () => { blockManual = false; fitBlock(); });
+  window.addEventListener('resize', () => { clearTimeout(fitTimer); fitTimer = setTimeout(() => { if (!blockManual) fitBlock(); }, 200); });
+  let fitTimer = null;
+  window.fitBlock = function() {
     const container = document.getElementById('alignCanvas');
     if (!container) return;
     // measure name column width from a rendered name element
@@ -974,11 +980,12 @@ document.getElementById('changedOnly').addEventListener('change', e => { changed
     if (sampleSpan) charPx = sampleSpan.getBoundingClientRect().width;
     if (!charPx) charPx = 12; // 12px Courier New at default size
     const available = container.clientWidth - namePx - 24;
-    const chars = Math.max(40, Math.min(300, Math.floor(available / charPx)));
+    const chars = Math.max(40, Math.min(600, Math.floor(available / charPx)));
+    if (chars === parseInt(slider.value)) return;
     slider.value = chars;
     input.value  = chars;
     if (viewMode === 'single' && filtered.length) renderAlignmentForCurrent();
-  });
+  };
 })();
 document.querySelectorAll('.filter-chip').forEach(chip => {
   chip.addEventListener('click', () => {
@@ -1366,7 +1373,12 @@ function renderAlignment(seqs, f) {
     rname.textContent = '';
     ruler.appendChild(rname);
     const rseq = document.createElement('span');
-    rseq.textContent = generateScale(blockLen, 10, blockStart);
+    rseq.className = 'msa-seq';
+    for (const ch of generateScale(blockLen, 10, blockStart)) {   // one span per column, as the sequence rows
+      const sp = document.createElement('span');
+      sp.textContent = ch === ' ' ? ' ' : ch;
+      rseq.appendChild(sp);
+    }
     ruler.appendChild(rseq);
     block.appendChild(ruler);
 
@@ -1425,7 +1437,9 @@ function renderAlignment(seqs, f) {
 
     container.appendChild(block);
   }
+  if (!blockManual && !_fitted) { _fitted = true; fitBlock(); }   // first render: block as wide as the window
 }
+let _fitted = false;
 
 // ── Grid view — lazy chunk rendering ────────────────────────────────────────
 let _gridRenderCancel = false;
