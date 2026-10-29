@@ -100,7 +100,7 @@
     flex-wrap: wrap;
   }
 
-  #filterInput {
+  #filterInput, #refSelect {
     background: var(--surface2);
     border: 1px solid var(--border);
     color: var(--text);
@@ -525,6 +525,7 @@
     <span class="filter-chip" data-type="PM"   title="Show .PM files">PM</span>
     <span class="filter-chip" data-type="MP"   title="Show .MP files">MP</span>
     <span class="filter-chip" data-type="REJ"  title="Show alignments rejected by ComPair.sh (rejected bundle or .badLF/.badRF/.shortRF/.lfSINE/.rfSINE files)">rejected</span>
+    <select id="refSelect" style="display:none;width:auto;max-width:220px;" title="Subfamily: the reference row of the alignment (bank mode)"></select>
     <label style="font-size:11px;white-space:nowrap;" title="Only alignments whose class changes under the current thresholds"><input type="checkbox" id="changedOnly"> changed</label>
   </div>
   <div class="sep"></div>
@@ -691,6 +692,7 @@ let currentIdx = 0;
 let viewMode = 'single';
 let activeFilters = new Set();
 let textFilter = '';
+let refFilter = '';       // subfamily = reference row of the alignment ('' = all)
 let changedOnly = false;
 let _textCache = new Map(); // name → text, loaded on demand
 
@@ -788,6 +790,7 @@ function setEntries(entries, what) {
   _textCache.clear();
   allFiles = entries;
   document.getElementById('fileInfo').textContent = `${allFiles.length} ${what}`;
+  fillRefSelect();
   applyFilter();
   // thresholds saved from an earlier session: classify the new alignments with them
   if (Object.keys(COMPAIR_DEFAULTS).some(k => thresholds[k] !== COMPAIR_DEFAULTS[k])) applyThresholds();
@@ -813,12 +816,20 @@ async function* bundleLines(file) {
   if (buf) yield buf;
 }
 
+// subfamily of an alignment = its reference row (the 3rd sequence): ">bank21_nor1 r1_r3_P1" -> r1_r3_P1
+function refOf(lines) {
+  const h = lines.filter(l => l.startsWith('>'))[2];
+  if (!h) return undefined;
+  const t = h.slice(1).trim().split(/\s+/);
+  return t[1] || t[0];
+}
+
 async function readBundle(file, out) {
   let name = null, lines = [];
   const flush = () => {
     if (name === null) return;
     const type = name.split('.').pop();
-    if (STATUS_TYPES.includes(type)) out.push({ name, type, text: lines.join('\n') + '\n' });
+    if (STATUS_TYPES.includes(type)) out.push({ name, type, ref: refOf(lines), text: lines.join('\n') + '\n' });
   };
   for await (const raw of bundleLines(file)) {
     const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
@@ -849,7 +860,8 @@ document.getElementById('bundleInput').addEventListener('change', async e => {
   setEntries(entries, `alignments from ${files.length} bundle${files.length > 1 ? 's' : ''}`);
 });
 
-// Bundles from the page address: ?bundle=URL (repeatable, relative to this page) and ?name=ALIGNMENT
+// Bundles from the page address: ?bundle=URL (repeatable, relative to this page) and ?name=ALIGNMENT;
+// ?ref=SUBFAMILY and ?type=SINE|PM|MP|REJ (repeatable) preset the subfamily and status filters
 // (repeatable: show only these alignments; the filter box still narrows them). Used by pages that link
 // one locus in several runs, e.g. the Tal orthologous-loci comparison.
 let nameSet = null;
@@ -875,6 +887,8 @@ let nameSet = null;
     progress.style.display = 'none';
   }
   if (q.get('title')) document.title = q.get('title');
+  if (q.get('ref')) refFilter = q.get('ref');
+  if (q.getAll('type').length) setTypeFilter(q.getAll('type'));
   setEntries(entries, `alignments from ${urls.length} bundle${urls.length > 1 ? 's' : ''}` +
                       (nameSet ? `, ${nameSet.size} selected` : ''));
 })();
@@ -985,9 +999,33 @@ document.getElementById('filterInput').addEventListener('input', e => {
   applyFilter();
 });
 
+function fillRefSelect() {
+  const sel = document.getElementById('refSelect');
+  const n = new Map();
+  allFiles.forEach(f => { if (f.ref) n.set(f.ref, (n.get(f.ref) || 0) + 1); });
+  sel.innerHTML = '';
+  sel.style.display = n.size ? '' : 'none';
+  if (!n.size) { refFilter = ''; return; }
+  const opt = (v, t) => { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.appendChild(o); };
+  opt('', `all subfamilies (${n.size})`);
+  [...n.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).forEach(([r, c]) => opt(r, `${r} (${c})`));
+  if (refFilter && !n.has(refFilter)) refFilter = '';
+  sel.value = refFilter;
+}
+document.getElementById('refSelect').addEventListener('change', e => { refFilter = e.target.value; applyFilter(); });
+
+function setTypeFilter(types) {
+  activeFilters = new Set(types.filter(t => ['SINE', 'PM', 'MP', 'REJ'].includes(t)));
+  document.querySelectorAll('.filter-chip').forEach(chip => {
+    const t = chip.dataset.type;
+    chip.className = activeFilters.has(t) ? `filter-chip on-${t.toLowerCase()}` : 'filter-chip';
+  });
+}
+
 function applyFilter() {
   filtered = allFiles.filter(f => {
     if (nameSet && !nameSet.has(f.name)) return false;
+    if (refFilter && f.ref !== refFilter) return false;
     if (activeFilters.size && !activeFilters.has(groupOf(liveOf(f)))) return false;
     if (changedOnly && !(f.live && f.live !== f.type)) return false;
     if (textFilter && !f.name.toLowerCase().includes(textFilter)) return false;

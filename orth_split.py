@@ -49,12 +49,12 @@ def main():
             if ref is None:
                 unlisted[status] += 1
                 return
-            key = (ref, status)
+            key = (dirs[ref], status)   # one handle per output file: a single gzip member (browsers reject several)
             if key not in handles:
                 os.makedirs(os.path.join(out, dirs[ref]), exist_ok=True)
-                handles[key] = gzip.open(os.path.join(out, dirs[ref], f'aln_{pair}_{status}.aln.gz'), 'at')
+                handles[key] = gzip.open(os.path.join(out, dirs[ref], f'aln_{pair}_{status}.aln.gz'), 'wt')
             handles[key].write(f'##FILE {name}\n' + ''.join(lines))
-            counts[key] += 1
+            counts[(ref, status)] += 1
 
         with gzip.open(b, 'rt') as fh:
             for line in fh:
@@ -70,7 +70,7 @@ def main():
         fh.write('reference\tdir\tstatus\talignments\n')
         for (ref, status), n in sorted(counts.items(), key=lambda kv: (-n_ref[kv[0][0]], kv[0])):
             fh.write(f'{ref}\t{dirs[ref]}\t{status}\t{n}\n')
-    print(f'{sum(counts.values())} alignments, {len(set(dirs.values()))} directories -> {out}'
+    print(f'{sum(counts.values())} alignments, {len(set(k[0] for k in handles))} directories -> {out}'
           + (f'; not in the orth table: {dict(unlisted)}' if unlisted else ''))
 
 
