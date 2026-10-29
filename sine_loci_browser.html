@@ -849,6 +849,36 @@ document.getElementById('bundleInput').addEventListener('change', async e => {
   setEntries(entries, `alignments from ${files.length} bundle${files.length > 1 ? 's' : ''}`);
 });
 
+// Bundles from the page address: ?bundle=URL (repeatable, relative to this page) and ?name=ALIGNMENT
+// (repeatable: show only these alignments; the filter box still narrows them). Used by pages that link
+// one locus in several runs, e.g. the Tal orthologous-loci comparison.
+let nameSet = null;
+(async function loadFromUrl() {
+  const q = new URLSearchParams(location.search);
+  const urls = q.getAll('bundle');
+  if (q.getAll('name').length) nameSet = new Set(q.getAll('name'));
+  if (!urls.length) return;
+  const progress = document.getElementById('loadProgress');
+  progress.style.display = '';
+  const entries = [];
+  try {
+    for (const u of urls) {
+      progress.textContent = `Loading ${u}…`;
+      const r = await fetch(u);
+      if (!r.ok) throw new Error(`${u}: HTTP ${r.status}`);
+      await readBundle({ name: u, stream: () => r.body }, entries);
+    }
+  } catch (err) {
+    alert(`Could not read bundle: ${err.message}`);
+    return;
+  } finally {
+    progress.style.display = 'none';
+  }
+  if (q.get('title')) document.title = q.get('title');
+  setEntries(entries, `alignments from ${urls.length} bundle${urls.length > 1 ? 's' : ''}` +
+                      (nameSet ? `, ${nameSet.size} selected` : ''));
+})();
+
 // ── Thresholds ───────────────────────────────────────────────────────────────
 const THR_LABELS = {
   CP_FLANK_LEN: 'min flank length (columns)', CP_FLANK_NID: 'min identical nt, left flank',
@@ -957,6 +987,7 @@ document.getElementById('filterInput').addEventListener('input', e => {
 
 function applyFilter() {
   filtered = allFiles.filter(f => {
+    if (nameSet && !nameSet.has(f.name)) return false;
     if (activeFilters.size && !activeFilters.has(groupOf(liveOf(f)))) return false;
     if (changedOnly && !(f.live && f.live !== f.type)) return false;
     if (textFilter && !f.name.toLowerCase().includes(textFilter)) return false;
