@@ -84,6 +84,9 @@ Bank mode starts when the consensus file has more than one sequence. It changes 
   bundles into `by_reference/<reference>/aln_<sp1>-<sp2>_<status>.aln.gz` (references with fewer
   than 20 loci under `other`; `by_reference/index.tsv` lists them), so one subfamily's alignments
   of one status open alone in `sine_loci_browser.html`.
+  The browser lists the subfamilies it finds in the loaded alignments (reference row) as a
+  drop-down next to the SINE / PM / MP / rejected chips; `?ref=SUBFAMILY` and `?type=PM` in its
+  address preset them, as `?bundle=` names the bundles to load.
 - **SINE identity threshold.** `ComPair.sh` needs > 100 identical nt between the two SINEs and with
   the reference (`CP_SINE_NID`). With `CP_SINE_FRAC` (bank mode default 50) the threshold is lowered
   to that percentage of the reference length when that is smaller, e.g. 52 nt for a 105 bp
