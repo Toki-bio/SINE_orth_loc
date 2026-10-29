@@ -398,7 +398,7 @@ SUPPORT_A = 0.75       # identity of the empty-site junction needed for "absent"
 MARGIN = 0.1           # the winning hypothesis must beat the other by this much
 ORTH_COLS = ['alignment', 'cluster', 'status', 'species1', 'locus1', 'sine1', 'species2', 'locus2', 'sine2',
              'LF', 'FL', 'LFcp', 'RFlength', 'FR', 'RFcp', 'OneTwo', 'OneSINE', 'TwoSINE', 'SL', 'SO', 'ST', 'FI',
-             'anchor1', 'anchor2']
+             'anchor1', 'anchor2', 'reference']
 
 
 def semiglobal_identity(q, t):
@@ -533,7 +533,7 @@ def cmd_orth(args):
                 name = f"N{k}_{e['element']}R"
                 rows.append([f'{name}.nested.{status}', name, status, sa, window_locus(c, xa, e['strand'], slop, args.flank),
                              '1', sb, window_locus(bc, xb, bstrand, slop, args.flank), '1' if outcome == 'present' else '0']
-                            + [''] * (len(ORTH_COLS) - 11) + [xa, xb])
+                            + [''] * (len(ORTH_COLS) - 12) + [xa, xb, e['element']])
     with open(args.output, 'w') as fh:
         fh.write('\t'.join(ORTH_COLS) + '\n')
         for r in rows:

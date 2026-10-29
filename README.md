@@ -63,11 +63,14 @@ Bank mode starts when the consensus file has more than one sequence. It changes 
   `<consensus>:<a>-<b>`, the span they cover). Grey and other not-SINE copies are left out.
   Overlapping copies become one locus.
 - **Reference row.** Every alignment gets the consensus of its own copy (or the covered span of a
-  partial copy) as reference row, named `>BANK`. A copy at least 10 % longer than its labelled
-  consensus gets the longer bank consensus that contains it and comes closest to its length
-  (a composite copy whose votes went to a unit inside it). When the two loci carry different labels,
-  the longer reference is used. `refs_<sp1>-<sp2>.tsv` lists the reference and the labels per
-  cluster. Windows are sized for the longest consensus.
+  partial copy) as reference row, named `>BANK <subfamily>` (or `>BANK <subfamily>:<a>-<b>` for a
+  span), so the subfamily is on the row in every alignment and viewer. A copy at least 10 % longer
+  than its labelled consensus gets the longer bank consensus that contains it and comes closest to
+  its length (a composite copy whose votes went to a unit inside it). When the two loci carry
+  different labels, the longer reference is used. The `reference` column of `orth_<sp1>-<sp2>.tsv`
+  names the reference row of every locus (single mode: the consensus name; nested rows: the
+  element); `refs_<sp1>-<sp2>.tsv` adds the labels of each cluster's copies. Windows are sized for
+  the longest consensus.
 - **SINE identity threshold.** `ComPair.sh` needs > 100 identical nt between the two SINEs and with
   the reference (`CP_SINE_NID`). With `CP_SINE_FRAC` (bank mode default 50) the threshold is lowered
   to that percentage of the reference length when that is smaller, e.g. 52 nt for a 105 bp

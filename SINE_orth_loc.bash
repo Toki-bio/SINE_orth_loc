@@ -309,7 +309,7 @@ if [[ "$BANK" == 1 ]]; then
     cut -f1-6 $sp1-$SINEname.bed $sp2-$SINEname.bed > "$COPIES"
     seqkit seq -w 0 "$3" | awk -v d="$REFDIR" -v n="$SINEname" -F'\t' '
      FNR==NR {if (/^>/) {h=substr($1,2); sub(/[ \t].*/,"",h)} else {seq[h]=toupper($0); f=h; gsub(/[:\/]/,"_",f)
-              print ">" n "\n" seq[h] > (d "/" f ".fa"); print h "\t" length(seq[h]) > (d "/lengths.tsv")}; next}
+              print ">" n " " h "\n" seq[h] > (d "/" f ".fa"); print h "\t" length(seq[h]) > (d "/lengths.tsv")}; next}
      FNR==1 {for (x in seq) for (y in seq) if (x != y && length(seq[y]) > length(seq[x])) {
                t=0; k=0; for (i=1; i+15<=length(seq[x]); i++) {t++; if (index(seq[y], substr(seq[x], i, 16))) k++}
                if (t && k >= 0.8*t) print x "\t" y > (d "/containers.tsv")}}
@@ -317,7 +317,7 @@ if [[ "$BANK" == 1 ]]; then
       if (match(l, /^(.*):([0-9]+)-([0-9]+)$/, m)) {c=m[1]; a=m[2]; b=m[3]}
       if (!(c in seq)) {print "bank mode: consensus " c " (BED label " l ") is not in the bank" > "/dev/stderr"; bad=1; next}
       s=(b ? substr(seq[c], a, b-a+1) : seq[c]); f=l; gsub(/[:\/]/,"_",f)
-      print ">" n "\n" s > (d "/" f ".fa"); print l "\t" length(s) > (d "/lengths.tsv")}
+      print ">" n " " l "\n" s > (d "/" f ".fa"); print l "\t" length(s) > (d "/lengths.tsv")}
      END {exit bad}' - "$COPIES" || exit 1
     sort -u -o "$REFDIR/lengths.tsv" "$REFDIR/lengths.tsv"; touch "$REFDIR/containers.tsv"
     echo "bank mode: $(wc -l < "$REFDIR/lengths.tsv") reference rows in $REFDIR"
@@ -579,10 +579,13 @@ awk '{if (NF>3) print $3}' statcomb | sort | uniq -c > MP_PM_SINE_"$sp1"-"$sp2".
 
 # one row per validated alignment, loci in alignment order (seq1 = the sequence SO refers to);
 # sine1/sine2: 1 if that locus carries the SINE. Input for sine_registry.py build.
+# reference: the consensus (bank mode: subfamily, or span a-b of it) that is the alignment's reference row
 echo "writing orth_$sp1-$sp2.tsv"
-awk -v sp1=$sp1 -v sp2=$sp2 -F'\t' '
+touch refs_chosen
+awk -v sp1=$sp1 -v sp2=$sp2 -v SINEname=$SINEname -v RC=refs_chosen -F'\t' '
  BEGIN {OFS="\t"; n=split("LF FL LFcp RFlength FR RFcp OneTwo OneSINE TwoSINE SL SO ST FI",K," ")
-     printf "alignment\tcluster\tstatus\tspecies1\tlocus1\tsine1\tspecies2\tlocus2\tsine2"; for (i=1;i<=n;i++) printf "\t%s", K[i]; print "\tanchor1\tanchor2"}
+     while ((getline l < RC) > 0) {split(l, x, "\t"); ref[x[1]]=x[2]}
+     printf "alignment\tcluster\tstatus\tspecies1\tlocus1\tsine1\tspecies2\tlocus2\tsine2"; for (i=1;i<=n;i++) printf "\t%s", K[i]; print "\tanchor1\tanchor2\treference"}
  FILENAME==ARGV[1] {g1[$1]; next}
  FILENAME ~ /(^|\/)stat_/ {split($0,f," "); b=f[1]; sub(/^\.\//,"",b); delete kv
      for (i=3;i<=length(f);i++) {p=index(f[i],"="); kv[substr(f[i],1,p-1)]=substr(f[i],p+1)}
@@ -593,7 +596,7 @@ awk -v sp1=$sp1 -v sp2=$sp2 -F'\t' '
      c1=$2; sub(/:[0-9]+-[0-9]+\([+-]\)$/,"",c1); c2=$3; sub(/:[0-9]+-[0-9]+\([+-]\)$/,"",c2)
      if (st=="contig_end") {s1=(edge[$1]==0)?"M":"?"; s2=(edge[$1]==1)?"M":"?"; st="MISSING"}
      else {s1=(st=="PM"||st=="SINE")?1:0; s2=(st=="MP"||st=="SINE")?1:0}
-     print $1,cl,st,((c1 in g1)?sp1:sp2),$2,s1,((c2 in g1)?sp1:sp2),$3,s2 met[$1], anchor($2,ls1[$1]), anchor($3,ls2[$1])}
+     print $1,cl,st,((c1 in g1)?sp1:sp2),$2,s1,((c2 in g1)?sp1:sp2),$3,s2 met[$1], anchor($2,ls1[$1]), anchor($3,ls2[$1]), ((cl in ref)?ref[cl]:SINEname)}
  # insertion junction in genome coordinates: window start + residues before the SINE (+), window end - them (-)
  function anchor(locus, ls,   m) {if (ls=="") return ""; match(locus, /:([0-9]+)-([0-9]+)\(([+-])\)$/, m)
      return (m[3]=="+") ? m[1]+ls : m[2]-ls}' \

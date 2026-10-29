@@ -11,8 +11,8 @@ junction is the row's junction (within 40 bp; junction = window start + FLANK, s
 of the row's junction in the other genome.
 Per run: rows, agree / disagree / untested; then rows shared by runs and rows found by one run only, with the
 same check, and rows where two runs pair one locus with different partners.
---out DIR: also write DIR/loci.tsv (one line per locus that differs between runs: the category, the check, and the
-alignment name of that locus in every run) and DIR/<category>/<run>/aln_<sp1>-<sp2>_<type>.aln.gz, small bundles with
+--out DIR: also write DIR/loci.tsv (one line per locus that differs between runs: the category, the check, the
+reference row = subfamily or span the locus was judged against, and the alignment name of that locus in every run) and DIR/<category>/<run>/aln_<sp1>-<sp2>_<type>.aln.gz, small bundles with
 only those alignments, to open in sine_loci_browser.html. Categories: disagree (some run's row disagrees with the lift),
 partner (runs pair the locus with different loci), status (runs give different statuses), only_<run> (one run only).
 For a run without a row at the locus, its alignments whose window holds the locus are taken from all its bundles
@@ -64,6 +64,11 @@ def rows_of(run):
     f = glob.glob(os.path.join(run, f'orth_{A}-{B}.tsv'))[0]
     rows = [r for r in csv.DictReader(open(f), delimiter='\t')
             if r['cluster'].startswith('C') and r['status'] in ('SINE', 'PM', 'MP') and r['anchor1'] and r['anchor2']]
+    # reference row of each cluster (subfamily or span): orth column, or refs_<A>-<B>.tsv of runs made before it
+    refs = {}
+    rf = os.path.join(run, f'refs_{A}-{B}.tsv')
+    if os.path.exists(rf):
+        refs = {r['cluster']: r['reference'] for r in csv.DictReader(open(rf), delimiter='\t')}
     off = collections.Counter()
     for r in rows:
         m = LOC.match(r['locus1'])
@@ -77,7 +82,8 @@ def rows_of(run):
             c, s, e, st = LOC.match(r['locus' + k]).groups()
             w = int(s) + F if st == '+' else int(e) - F; x = int(r['anchor' + k])
             side[r['species' + k]] = (c, x if abs(x - w) <= 50 else w, r['sine' + k])
-        if A in side and B in side: out.append((r['status'], side[A], side[B], r['alignment']))
+        if A in side and B in side:
+            out.append((r['status'], side[A], side[B], r['alignment'], r.get('reference') or refs.get(r['cluster'], '')))
     return out
 
 def check(sa, sb):
@@ -169,7 +175,7 @@ if a.out:
     want = collections.defaultdict(set)        # (category, run) -> alignment names
     os.makedirs(a.out, exist_ok=True)
     with open(os.path.join(a.out, 'loci.tsv'), 'w') as fo:
-        fo.write('\t'.join(['locus', 'category', A + '_anchor', 'check'] + names) + '\n')
+        fo.write('\t'.join(['locus', 'category', A + '_anchor', 'check', 'reference'] + names) + '\n')
         k = 0
         for L in loci:
             c = cats(L)
@@ -184,7 +190,8 @@ if a.out:
                 for x in c:
                     for nm in al: want[(x, n)].add(nm)
             chk = ','.join(sorted({check(r[1], r[2]) for r in L['rows'].values()}))
-            fo.write('\t'.join([f'L{k}', ','.join(c), f"{L['a'][0]}:{L['a'][1]}", chk] + cells) + '\n')
+            refc = ','.join(sorted({r[4] for r in L['rows'].values() if r[4]}))
+            fo.write('\t'.join([f'L{k}', ','.join(c), f"{L['a'][0]}:{L['a'][1]}", chk, refc] + cells) + '\n')
     for (x, n), nms in sorted(want.items()):
         run = next(r for r in a.runs if os.path.basename(os.path.normpath(r)) == n)
         d = os.path.join(a.out, x, n); os.makedirs(d, exist_ok=True); got = 0
