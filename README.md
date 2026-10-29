@@ -109,8 +109,12 @@ consensus alone (`D.fa`, `aaa-D.bed`, `bbb-D.bed`): 70/330.
   nested-locus steps.
 - `MAPPER` (bwa) / `MM2_OPTS` (`-x sr`): the left-flank mapper (`minimap2 -a --secondary=no`). Rescue and
   the nested-locus step still use bwa.
-- `BOTHFLANKS` (0): 1 maps the right flanks too; a left-flank hit is kept only where the right flank of
-  the same copy maps on the same target sequence and strand, -30 to SINElength + 100 bp downstream.
+- `BOTHFLANKS` (1): maps the right flanks too; a left-flank hit is kept only where the right flank of
+  the same copy maps on the same target sequence and strand, -30 to SINElength + 100 bp downstream,
+  or where that cannot be tested: the copy's own right flank is shorter than `MINRF` (100 bp; a copy
+  at a contig end of its genome, tagged `RF=short` in the hit's MAPQ field) or the hit lies closer
+  than SINElength + 100 + `MINRF` bp to the target contig end on the right-flank side (`RF=edge`).
+  `BOTHFLANKS=0` maps the left flanks only (the behaviour before 2026-10-30).
 
 Toy (`tests/simulate_flanks.py`, 450 events: 266 plain, 63 with a repeat as left flank, 55 segmental
 duplicates in bbb, 40 contig ends, 26 right-flank indels; `RESCUE=0 NEST=0`), events with the right
@@ -129,8 +133,14 @@ gave 1-2 paralog pairs (segmental duplicate), both-flank runs none.
 | | minimap2 `-x asm20` | 0 | 0 | 15 | 0 |
 
 Per class: 500 bp flanks recover the right-flank indels (20 -> 26); both flanks recover repeat-flank loci
-(bwa 500 bp, 16 %: 14 -> 37) and lose contig-end loci (26 -> 17); segmental duplicates stay mostly
-unresolved without the rescue (~10/55).
+(bwa 500 bp, 16 %: 14 -> 37) and, before the contig-end rule, lost contig-end loci (26 -> 17); segmental
+duplicates stay mostly unresolved without the rescue (~10/55).
+
+With the contig-end rule (2026-10-30; the table above is without it) the both-flank runs keep every
+contig-end locus the one-flank runs find and lose nothing else: contig ends 24 -> 28 of 40 at ~6 %,
+17 -> 23 (bwa 300), 17 -> 25 (bwa 500), 21 -> 26 (minimap2 -k 11, 300) at ~16 %; all events right
+385 / 392 (bwa 300 / 500, ~6 %) and 275 / 341 / 350 (bwa 300 / bwa 500 / minimap2 -k 11 300, ~16 %),
+no wrong status or pair. Both flanks is therefore the default.
 
 ## Multi-copy loci (multimappers)
 

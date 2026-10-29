@@ -22,9 +22,10 @@ PYTHON=${PYTHON:-python3}    # Python >= 3.7 (e.g. PYTHON=/usr/local/bin/python3
 FLANK=${FLANK:-300}          # flank length (bp) mapped to the other genome; also the distance below which copies form one locus
 MAPPER=${MAPPER:-bwa}        # flank mapper: bwa (bwa mem) or minimap2 (minimap2 -a $MM2_OPTS); rescue and nest use bwa
 MM2_OPTS=${MM2_OPTS:--x sr}  # minimap2 options, e.g. "-x sr", "-x asm20", "-x sr -k 11 -w 5"
-BOTHFLANKS=${BOTHFLANKS:-0}  # 1: map the right flanks too and keep a left-flank hit only where the right flank of the
-                             # same copy maps on the same target sequence and strand, downstream of it
-                             # (0 to SINElength + 100 bp away)
+BOTHFLANKS=${BOTHFLANKS:-1}  # 1 (default): map the right flanks too and keep a left-flank hit only where the right
+                             # flank of the same copy maps on the same target sequence and strand, downstream of it
+                             # (-30 to SINElength + 100 bp away), or where it cannot be tested (contig end, see
+                             # both_flanks); 0: left flanks only
 # A pair can be run in pieces (e.g. on CI runners or array jobs with a time limit), all in one directory
 # or with the directory copied between steps:
 #   STAGE=prep                 flank mapping and clustering; writes the batch files (PART*, MULTIPART*)
@@ -147,14 +148,27 @@ map_flanks() {  # $1: genome, $2: flank FASTA, $3: output prefix (writes $3.sam 
 }
 
 # BOTHFLANKS=1: keep a left-flank hit only where the right flank of the same copy has a hit on the same target
-# sequence and strand, -30 to SINElength + 100 bp downstream of the left-flank hit (in the flank orientation)
-both_flanks() {  # $1: left-flank hits BED (filtered in place), $2: right-flank hits BED
-    awk -v M=$((SINElength+100)) 'BEGIN {OFS="\t"} NR==FNR {r[$4]=r[$4] " " $1"|"$2"|"$3"|"$6; next}
-     {n=split(r[$4], h, " "); ok=0
+# sequence and strand, -30 to SINElength + 100 bp downstream of the left-flank hit (in the flank orientation).
+# Contig-end rule: a hit whose right flank cannot be tested is kept and tagged in the MAPQ field --
+# RF=short: the copy's own right flank is shorter than MINRF bp (copy at a contig end of its genome; flanks
+# under 100 bases are not mapped at all); RF=edge: the hit lies closer than SINElength + 100 + MINRF bp to
+# the target contig end on the right-flank side, so the right flank has no room to land.
+MINRF=${MINRF:-100}
+both_flanks() {  # $1: left-flank hits BED (filtered in place), $2: right-flank hits BED, $3: right-flank BED of
+                 # the source genome (lengths), $4: target genome .fai
+    awk -v M=$((SINElength+100)) -v MINRF=$MINRF 'BEGIN {OFS="\t"}
+     FILENAME==ARGV[1] {r[$4]=r[$4] " " $1"|"$2"|"$3"|"$6; next}
+     FILENAME==ARGV[2] {rl[$4]=$3-$2; next}
+     FILENAME==ARGV[3] {len[$1]=$2; next}
+     {if (rl[$4]+0 < MINRF) {$5=$5",RF=short"; short++; print; next}
+      room=($6=="+") ? len[$1]-$3 : $2
+      if (room < M+MINRF) {$5=$5",RF=edge"; edge++; print; next}
+      n=split(r[$4], h, " "); ok=0
       for (i=1; i<=n; i++) {split(h[i], x, "|"); if (x[1]!=$1 || x[4]!=$6) continue
        d=($6=="+") ? x[2]-$3 : $2-x[3]; if (d>=-30 && d<=M) ok=1}
       if (ok) print; else bad++}
-     END {print FILENAME ": " bad+0 " left-flank hits without a matching right-flank hit removed" > "/dev/stderr"}' "$2" "$1" > "$1.tmp" &&
+     END {print FILENAME ": " bad+0 " left-flank hits without a matching right-flank hit removed; kept untested: " \
+          short+0 " RF=short, " edge+0 " RF=edge" > "/dev/stderr"}' "$2" "$3" "$4" "$1" > "$1.tmp" &&
      mv "$1.tmp" "$1"
 }
 
@@ -169,8 +183,8 @@ map_flanks $2 "$sp1"_flanks_$FLANK.bnk "$sp1"_flanks-$sp2$sfx
 if [[ "$BOTHFLANKS" == 1 ]]; then
     map_flanks $1 "$sp2"_rflanks_$FLANK.bnk "$sp2"_rflanks-$sp1$sfx
     map_flanks $2 "$sp1"_rflanks_$FLANK.bnk "$sp1"_rflanks-$sp2$sfx
-    both_flanks "$sp2"_flanks-$sp1$sfx.bed "$sp2"_rflanks-$sp1$sfx.bed
-    both_flanks "$sp1"_flanks-$sp2$sfx.bed "$sp1"_rflanks-$sp2$sfx.bed
+    both_flanks "$sp2"_flanks-$sp1$sfx.bed "$sp2"_rflanks-$sp1$sfx.bed "$sp2"_rflanks_$FLANK.bed $1.fai
+    both_flanks "$sp1"_flanks-$sp2$sfx.bed "$sp1"_rflanks-$sp2$sfx.bed "$sp1"_rflanks_$FLANK.bed $2.fai
 fi
 if [[ -n "$sfx" ]]; then cp "$sp2"_flanks-$sp1$sfx.bed "$sp2"_flanks-$sp1.bed; cp "$sp1"_flanks-$sp2$sfx.bed "$sp1"_flanks-$sp2.bed; fi
 echo mapping complete
