@@ -142,6 +142,15 @@ contig-end locus the one-flank runs find and lose nothing else: contig ends 24 -
 385 / 392 (bwa 300 / 500, ~6 %) and 275 / 341 / 350 (bwa 300 / bwa 500 / minimap2 -k 11 300, ~16 %),
 no wrong status or pair. Both flanks is therefore the default.
 
+minimap2 tuning for repeat flanks (2026-10-30, both flanks, 300 bp, `-x sr -k 11 -w 3` plus the option
+named; contig ends / all events right): lifting the minimizer frequency cutoff (`-f 0 -U 1000000`) changes
+nothing (the toy repeat, ~70 copies, never reached the cutoff of 1000); `-w 1` adds at most one locus;
+`-k 13 -w 5` equals bwa at ~6 % (385, repeat flanks 62) but collapses at ~16 % (323, 26);
+`-p 0.5 -N 50` is the best: repeat flanks 62 (= bwa) and all 384 (bwa 385) at ~6 %, 35 and 352 at ~16 %
+(bwa 26 and 275). Segmental duplicates stay bwa's: 14 vs 7 at ~16 %. No time cost (208-224 s per run for
+every variant). So `MAPPER=minimap2 MM2_OPTS="-x sr -k 11 -w 3 -p 0.5 -N 50"` is the index-free setting
+to use; bwa remains the default mapper and the rescue/nested steps still need the bwa index.
+
 ## Multi-copy loci (multimappers)
 
 When a flank matches several places, loci join into clusters of 3–10 (multi) or more
