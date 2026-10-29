@@ -644,3 +644,5 @@ fi
 # per-reference summary of the pair (loci, statuses, identities): summary_<sp1>-<sp2>.tsv
 "$PYTHON" "$(dirname "$(readlink -f "$0")")/orth_summary.py" orth_"$sp1"-"$sp2".tsv \
     --copies "$sp1=$sp1-$SINEname.bed" "$sp2=$sp2-$SINEname.bed"
+# the SINE/PM/MP bundles split per reference, for viewing one subfamily's alignments: by_reference/<reference>/
+"$PYTHON" "$(dirname "$(readlink -f "$0")")/orth_split.py" orth_"$sp1"-"$sp2".tsv
