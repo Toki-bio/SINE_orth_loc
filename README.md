@@ -77,6 +77,9 @@ Bank mode starts when the consensus file has more than one sequence. It changes 
   mode, rescue windows) the junction is where the reference row's first residue aligns, measured
   after ComPair's short-left-flank fix. A reference longer than the copy (partial copy, composite)
   starts anywhere in the left flank; this put ~5 % of rsi–rfe anchors >50 bp off before 2026-10-29.
+- **Summary.** `orth_summary.py` (run at the end) writes `summary_<sp1>-<sp2>.tsv`: per reference,
+  input copies per genome, loci by row type and status, shared %, and the median (10–90 %) identity
+  of copies to the reference, between the two copies of shared loci, and of the left flanks.
 - **SINE identity threshold.** `ComPair.sh` needs > 100 identical nt between the two SINEs and with
   the reference (`CP_SINE_NID`). With `CP_SINE_FRAC` (bank mode default 50) the threshold is lowered
   to that percentage of the reference length when that is smaller, e.g. 52 nt for a 105 bp

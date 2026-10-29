@@ -640,3 +640,7 @@ if [[ "$NEST" == 1 ]]; then
         echo "nhmmer (HMMER) not found: skipping the nested/close/satellite analysis (NEST=0 to silence)"
     fi
 fi
+
+# per-reference summary of the pair (loci, statuses, identities): summary_<sp1>-<sp2>.tsv
+"$PYTHON" "$(dirname "$(readlink -f "$0")")/orth_summary.py" orth_"$sp1"-"$sp2".tsv \
+    --copies "$sp1=$sp1-$SINEname.bed" "$sp2=$sp2-$SINEname.bed"
