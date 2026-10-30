@@ -217,6 +217,24 @@ genomes (rsi 2.12 Gbp, rfe 2.08 Gbp; 2026-10-28 run):
   (the whole flank mapping of 50 k flanks took 53-110 s with 20 threads, index included); `bwa index` of
   the same genome took 34 min (BWT construction 23 min) for 3.7 GB of index files. Supplementary pieces (`-x sr` splits at indels wider than its
   band of 100) are left out by the pipeline in both mappers (flag 2048), as before.
+- Real pair (rsi-rfe, 2.1 Gbp each, bank of 21 consensi, 300 bp, both flanks, 40 threads; copy +-10 kb
+  check of `tests/compare_real.py`: rows, of which the partner copy agrees / disagrees / is untested):
+
+  | run | rows | agree | disagree | untested | pipeline time from bare genomes |
+  |---|---|---|---|---|---|
+  | bwa, `ADAPT=""` | 51,075 | 48,870 | 1,179 | 1,026 | 92 min + 2 x 34 min `bwa index` = ~2 h 40 |
+  | minimap2, `ADAPT=""` | 51,037 | 48,806 | 1,201 | 1,030 | 90 min + 2 x 38 s index = ~91 min |
+  | minimap2, `ADAPT="600 1000"` | 51,090 | 48,944 | 1,023 | 1,123 | ~110 min |
+  | minimap2, `ADAPT` + stop at copies | 51,083 | 48,939 | 1,022 | 1,122 | ~114 min |
+
+  The two mappers alone are equal within 0.1 %; the adaptive extension (about 5,000 of 50,000 flanks per
+  direction unresolved at 300 bp; 600 bp resolved ~3,100 of them, 1,000 bp ~500 more, 35-86 unmapped flanks
+  per direction newly placed; ~6 % of the final hits carry `EXT=`) replaces poorly supported rows by well
+  supported ones (rows only in the adaptive run: 542, 310 agree / 117 disagree; only in the plain run: 489,
+  191 / 255). The stop at neighbouring copies truncated 109-136 extended flanks per direction and pass
+  (20-24 of them to nothing) and cost 20 rows (17 agreeing) for 4 gained: the price of never mapping a
+  flank that contains another copy. The rescue's one-partner rule fired 59 times. Each flank mapping with
+  the prebuilt `.mmi` took 5 s; the pipeline time is the alignments, not the mapping.
 
 ## Multi-copy loci (multimappers)
 
