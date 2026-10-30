@@ -40,7 +40,7 @@ If you use SINE_orth_loc, please cite the paper (see `CITATION.cff`).
         -n1 sp1 -n2 sp2 -o results_sp1-sp2 -t 16 --scratch "$TMPDIR"
 
 `SINE_orth_loc_flexible.sh --help` lists all options. Requires mafft, esl-alipid, seqkit,
-bedtools, samtools, bwa, sam2bed (BEDOPS) and GNU awk.
+bedtools, samtools, minimap2 (or bwa with `MAPPER=bwa`), sam2bed (BEDOPS) and GNU awk.
 
 On a cluster, set `-t` to the number of allocated cores and `--scratch` to node-local
 storage (defaults to `$SLURM_TMPDIR` or `$TMPDIR` when set). Use `--force` to reuse an
@@ -103,15 +103,17 @@ consensus alone (`D.fa`, `aaa-D.bed`, `bbb-D.bed`): 70/330.
 
 ## Flank length, mapper, one or both flanks (testing)
 
-    FLANK=500 MAPPER=minimap2 MM2_OPTS="-x sr -k 11 -w 3" BOTHFLANKS=1 SINE_orth_loc.bash ...
+    FLANK=500 MAPPER=bwa BOTHFLANKS=1 ADAPT="" SINE_orth_loc.bash ...
 
 - `FLANK` (300): flank length; copies closer than this form one locus; passed to the rescue and the
   nested-locus steps.
-- `MAPPER` (bwa) / `MM2_OPTS` (`-x sr -k 11 -w 3 -p 0.5 -N 50`): the mapper of the flanks
+- `MAPPER` (minimap2) / `MM2_OPTS` (`-x sr -k 11 -w 3 -p 0.5 -N 50`): the mapper of the flanks
   (`minimap2 -a --secondary=no`), of the rescue and of the nested-locus test (`minimap2 -a --secondary=yes
-  -N 50`, the counterpart of `bwa mem -a`). With minimap2 no bwa index is needed: a `.mmi` index is built
-  once per genome in the run directory (`<genome>.mmi`, tagged with `MM2_OPTS` in `<genome>.mmi.opts` and
-  rebuilt when the options change; about 9 GB and 1-2 min for a 2 Gbp genome).
+  -N 50`, the counterpart of `bwa mem -a`). A `.mmi` index is built once per genome in the run directory
+  (`<genome>.mmi`, tagged with `MM2_OPTS` in `<genome>.mmi.opts` and rebuilt when the options change;
+  about 9 GB, ~40 s and 19-27 GB of memory for a 2 Gbp genome). `MAPPER=bwa` uses `bwa mem` instead
+  (a `bwa index` is built if missing: 34 min and ~5 GB per 2 Gbp genome); the results are the same within
+  0.2 % (table under "minimap2 settings"), so bwa is the choice for small-memory machines.
 - `BOTHFLANKS` (1): maps the right flanks too; a left-flank hit is kept only where the right flank of
   the same copy maps on the same target sequence and strand, -30 to SINElength + 100 bp downstream,
   or where that cannot be tested: the copy's own right flank is shorter than `MINRF` (100 bp; a copy
@@ -162,7 +164,8 @@ nothing (the toy repeat, ~70 copies, never reached the cutoff of 1000); `-w 1` a
 `-p 0.5 -N 50` is the best: repeat flanks 62 (= bwa) and all 384 (bwa 385) at ~6 %, 35 and 352 at ~16 %
 (bwa 26 and 275). Segmental duplicates stay bwa's: 14 vs 7 at ~16 %. No time cost (208-224 s per run for
 every variant). So `MAPPER=minimap2 MM2_OPTS="-x sr -k 11 -w 3 -p 0.5 -N 50"` is the minimap2 setting
-(the default `MM2_OPTS`); bwa remains the default mapper.
+(the default `MM2_OPTS`). minimap2 is the default mapper since 2026-10-30 (after the real-pair comparison
+below); bwa stays available as `MAPPER=bwa`.
 
 Adaptive flank extension (2026-10-30, `ADAPT="600 1000"`, `ADAPT_MAPQ=20`, both flanks, 300 bp, `RESCUE=1
 NEST=1`; events right, ADAPT off -> on; the off runs reproduce the previous runs exactly): at ~6 % bwa 430 ->

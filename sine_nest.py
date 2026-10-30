@@ -735,7 +735,7 @@ def main():
     o = sub.add_parser('orth', help='orthology of the elements of compound loci (outer flanks + junction tests)')
     o.add_argument('--a', required=True, metavar='SP=FASTA', help='genome with the compound loci (scan PREFIX)')
     o.add_argument('--b', required=True, metavar='SP=FASTA', help='genome searched (bwa index, or --index for minimap2)')
-    o.add_argument('--mapper', default='bwa', choices=['bwa', 'minimap2'], help='flank mapper [bwa]')
+    o.add_argument('--mapper', default='minimap2', choices=['bwa', 'minimap2'], help='flank mapper [minimap2]')
     o.add_argument('--mapper-opts', default='', help='minimap2 options, e.g. "-x sr -k 11 -w 3 -p 0.5 -N 50"')
     o.add_argument('--index', help='minimap2 .mmi index of genome b (built on the fly from the FASTA if absent)')
     o.add_argument('--scan', required=True, metavar='PREFIX', help='scan output prefix of genome a')

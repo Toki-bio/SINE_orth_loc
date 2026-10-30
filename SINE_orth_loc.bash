@@ -20,8 +20,9 @@ NEST=${NEST:-1}              # 0: skip nested/close/satellite analysis (sine_nes
 NEST_PY="$(dirname "$(readlink -f "$0")")/sine_nest.py"
 PYTHON=${PYTHON:-python3}    # Python >= 3.7 (e.g. PYTHON=/usr/local/bin/python3.12 where python3 is older)
 FLANK=${FLANK:-300}          # flank length (bp) mapped to the other genome; also the distance below which copies form one locus
-MAPPER=${MAPPER:-bwa}        # mapper for the flanks, the rescue and the nested-locus test: bwa (bwa mem, needs
-                             # bwa index) or minimap2 (minimap2 -a $MM2_OPTS; a .mmi index is built once per genome)
+MAPPER=${MAPPER:-minimap2}   # mapper for the flanks, the rescue and the nested-locus test: minimap2 (minimap2 -a
+                             # $MM2_OPTS; a .mmi index is built once per genome, ~40 s) or bwa (bwa mem, needs a
+                             # bwa index: ~34 min per 2 Gbp genome; same results, less memory, README: minimap2 settings)
 MM2_OPTS=${MM2_OPTS:--x sr -k 11 -w 3 -p 0.5 -N 50}  # minimap2 options (README: minimap2 settings)
 BOTHFLANKS=${BOTHFLANKS:-1}  # 1 (default): map the right flanks too and keep a left-flank hit only where the right
                              # flank of the same copy maps on the same target sequence and strand, downstream of it
@@ -150,7 +151,7 @@ mm2_index() {  # $1: genome; writes $1.mmi and $1.mmi.opts
     fi
 }
 
-# mapping flank sequences, one placement per flank (bwa mem, or minimap2 with MAPPER=minimap2); hits to BED:
+# mapping flank sequences, one placement per flank (minimap2, or bwa mem with MAPPER=bwa); hits to BED:
 # target, start, end, flank name, MAPQ/LENGTH/AS, strand (SAM records with fewer than 100 bases of SEQ are left out)
 map_flanks() {  # $1: genome, $2: flank FASTA, $3: output prefix (writes $3.sam and $3.bed)
     if [ -f "$3.sam" ]; then echo "$3.sam found"; else

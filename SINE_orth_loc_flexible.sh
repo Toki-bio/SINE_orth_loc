@@ -77,7 +77,7 @@ NOTES:
     - Input FASTA files can have any extension (.fa, .fasta, .fna, etc.)
     - BED files must be 6-column format with strand information
     - SINE consensus header in FASTA must match the filename (without extension)
-    - Requires: mafft, esl-alipid, seqkit, bedtools, samtools, bwa, sam2bed, ComPair.sh
+    - Requires: mafft, esl-alipid, seqkit, bedtools, samtools, minimap2 (or bwa with MAPPER=bwa), sam2bed, ComPair.sh
 
 EOF
 }
@@ -233,7 +233,7 @@ validate_bed "$BED2" "BED2"
 
 # Check required tools
 echo "Checking required tools..."
-REQUIRED_TOOLS=("mafft" "esl-alipid" "seqkit" "bedtools" "samtools" "bwa" "sam2bed" "gawk" "${PYTHON:-python3}")
+REQUIRED_TOOLS=("mafft" "esl-alipid" "seqkit" "bedtools" "samtools" "${MAPPER:-minimap2}" "sam2bed" "gawk" "${PYTHON:-python3}")
 MISSING_TOOLS=()
 
 for tool in "${REQUIRED_TOOLS[@]}"; do
