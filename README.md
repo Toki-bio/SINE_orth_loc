@@ -125,7 +125,9 @@ consensus alone (`D.fa`, `aaa-D.bed`, `bbb-D.bed`): 70/330.
   cut back to `FLANK` bp at its far side, keeping the SINE-side end, and tagged `EXT=<length>` in the
   MAPQ field, so `both_flanks` and every later step see `FLANK`-bp hits as before. Applied to left and
   right flanks in both directions before the two-flank check; files `<hits>.ext<L>.{in.bed,bnk,sam,bed}`.
-  `ADAPT=""` turns it off.
+  The extension stops at the nearest other annotated copy of the species (`<sp>-<SINE>.bed`, clustered
+  copies included), so an extended flank never contains another SINE copy (flanks left at `FLANK` + 50 bp
+  or shorter are not mapped again), and `EXT=<n>` gives the length n actually reached. `ADAPT=""` turns it off.
 
 Toy (`tests/simulate_flanks.py`, 450 events: 266 plain, 63 with a repeat as left flank, 55 segmental
 duplicates in bbb, 40 contig ends, 26 right-flank indels; `RESCUE=0 NEST=0`), events with the right

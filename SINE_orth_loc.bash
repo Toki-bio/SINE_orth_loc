@@ -199,8 +199,11 @@ both_flanks() {  # $1: left-flank hits BED (filtered in place), $2: right-flank 
 # ADAPT: flanks still unresolved (no hit, or best MAPQ < ADAPT_MAPQ) are cut again at each length L of ADAPT
 # from the source genome, under their FLANK-bp name, and mapped again; a hit with MAPQ >= ADAPT_MAPQ (and above
 # the old one) replaces the old hit, cut back to FLANK bp at the far side so that its SINE-side end is kept
-# (left flank: the hit end on +, the start on -; right flank: the start on +, the end on -) and tagged ",EXT=L"
+# (left flank: the hit end on +, the start on -; right flank: the start on +, the end on -) and tagged ",EXT=<n>"
 # in the MAPQ field. The hits BED is rewritten in place, so both_flanks and all later steps see FLANK-bp hits.
+# The extended flank stops at the nearest other annotated copy of the species ($4-$SINEname.bed, clustered copies
+# included) on its far side, so it never contains another SINE copy; a flank left at FLANK + 50 bp or shorter is
+# not mapped again; EXT=<n> gives the length n actually reached (from $p.in.bed).
 adapt_flanks() {  # $1: hits BED (updated in place), $2: flank FASTA, $3: source genome, $4: source species,
                   # $5: target genome, $6: l (left flanks) or r (right flanks)
     local L p
@@ -208,28 +211,43 @@ adapt_flanks() {  # $1: hits BED (updated in place), $2: flank FASTA, $3: source
         p="${1%.bed}.ext$L"
         awk -v Q=$ADAPT_MAPQ 'FNR==NR {split($5, m, /[=,]/); if (m[2]+0 >= Q) ok[$4]=1; next}
          /^>/ {n=substr($1, 2); if (!(n in ok)) print n}' "$1" "$2" > "$p.names"
-        # L-bp flanks of the unresolved copies, named by the FLANK-bp left flank (as bedtools flank + getfasta -s)
-        awk -v F=$FLANK -v L=$L -v side=$6 'BEGIN {OFS="\t"} FILENAME==ARGV[1] {u[$1]=1; next}
+        # L-bp flanks of the unresolved copies, named by the FLANK-bp left flank (as bedtools flank + getfasta -s),
+        # cut back at the far side to the nearest other copy of $4-$SINEname.bed (copies indexed in 10 kb bins);
+        # kept only if longer than FLANK + 50 bp. Counts (truncated, dropped after truncation, dropped short at a
+        # contig end) go to $p.cnt.
+        awk -v F=$FLANK -v L=$L -v side=$6 -v C="$p.cnt" 'BEGIN {OFS="\t"; W=10000} FILENAME==ARGV[1] {u[$1]=1; next}
          FILENAME==ARGV[2] {len[$1]=$2; next}
+         FILENAME==ARGV[3] {for (b=int($2/W); b<=int(($3-1)/W); b++) bin[$1,b]=bin[$1,b] " " $2 " " $3; next}
          {lo=($2>L)?$2-L:0; hi=($3+L<len[$1])?$3+L:len[$1]
           if ($6=="+") {n=$1":"(($2>F)?$2-F:0)"-"$2"(+)"; s=(side=="l")?lo:$3; e=(side=="l")?$2:hi}
           else {n=$1":"$3"-"(($3+F<len[$1])?$3+F:len[$1])"(-)"; s=(side=="l")?$3:lo; e=(side=="l")?hi:$2}
-          if ((n in u) && e>s) print $1, s, e, n, 0, $6}' "$p.names" $3.fai $4-"$SINEname"_uniq.bed > "$p.in.bed"
+          if (!(n in u) || e<=s) next
+          low=(($6=="+") == (side=="l")); s0=s; e0=e  # far side: low coordinates (left +, right -) or high
+          for (b=int(s0/W); b<=int((e0-1)/W); b++) {k=split(bin[$1,b], c, " ")
+           for (i=1; i<k; i+=2) if (c[i+1]+0 > s0 && c[i]+0 < e0) {if (low) {if (c[i+1]+0 > s) s=c[i+1]+0}
+                                                                 else {if (c[i]+0 < e) e=c[i]+0}}}
+          t=(s!=s0 || e!=e0); nt+=t
+          if (e-s <= F+50) {if (t) nd++; else ns++; next}
+          print $1, s, e, n, 0, $6}
+         END {print nt+0, nd+0, ns+0 > C}' "$p.names" $3.fai $4-"$SINEname".bed $4-"$SINEname"_uniq.bed > "$p.in.bed"
+        local nt nd ns; read -r nt nd ns < "$p.cnt"; rm -f "$p.cnt"
         local nu=$(wc -l < "$p.names") nc=$(cut -f4 "$p.in.bed" | sort -u | wc -l); rm -f "$p.names"
-        (( nu == nc )) || echo "$1: L=$L: $nu unresolved flanks but $nc found in $4-${SINEname}_uniq.bed" >&2
-        (( nc > 0 )) || { echo "$1: L=$L: $nu unresolved, 0 improved (MAPQ >= $ADAPT_MAPQ), 0 newly placed" >&2; break; }
+        local tr="$nt truncated at a neighbouring copy ($nd dropped), $ns too short at a contig end"
+        (( nu == nc + nd + ns )) || echo "$1: L=$L: $nu unresolved flanks but $((nc + nd + ns)) found in $4-${SINEname}_uniq.bed" >&2
+        (( nc > 0 )) || { echo "$1: L=$L: $nu unresolved, $tr, 0 improved (MAPQ >= $ADAPT_MAPQ), 0 newly placed" >&2; break; }
         bedtools getfasta -s -name -bed "$p.in.bed" -fi $3 | sed '/^>/s/::.*//' > "$p.bnk"
         map_flanks $5 "$p.bnk" "$p"
-        awk -v Q=$ADAPT_MAPQ -v F=$FLANK -v L=$L -v side=$6 -v nu=$nu -v B="$1" 'BEGIN {OFS="\t"}
+        awk -v Q=$ADAPT_MAPQ -v F=$FLANK -v L=$L -v side=$6 -v nu=$nu -v tr="$tr" -v B="$1" 'BEGIN {OFS="\t"}
          function mq(x,  m) {split(x, m, /[=,]/); return m[2]+0}
          FILENAME==ARGV[1] && FNR==NR {if (!($4 in old) || mq($5) > old[$4]) old[$4]=mq($5); next}
-         FILENAME==ARGV[2] {q=mq($5); if (q >= Q && (!($4 in old) || q > old[$4]) && (!($4 in nq) || q > nq[$4])) {
+         FILENAME==ARGV[2] {xl[$4]=$3-$2; next}  # length of the extended flank actually cut
+         FILENAME==ARGV[3] {q=mq($5); if (q >= Q && (!($4 in old) || q > old[$4]) && (!($4 in nq) || q > nq[$4])) {
            if (($6=="+") == (side=="l")) {if ($2 < $3-F) $2=$3-F} else {if ($3 > $2+F) $3=$2+F}  # SINE side kept
-           $5=$5",EXT="L; nq[$4]=q; hit[$4]=$0}; next}
+           $5=$5",EXT="xl[$4]; nq[$4]=q; hit[$4]=$0}; next}
          !($4 in hit) {print}
          END {for (n in hit) {print hit[n]; m++; k+=!(n in old)}
-              print B ": L=" L ": " nu " unresolved, " m+0 " improved (MAPQ >= " Q "), " k+0 " newly placed" > "/dev/stderr"}' \
-         "$1" "$p.bed" "$1" | bedtools sort -i > "$1.tmp" && mv "$1.tmp" "$1"
+              print B ": L=" L ": " nu " unresolved, " tr ", " m+0 " improved (MAPQ >= " Q "), " k+0 " newly placed" > "/dev/stderr"}' \
+         "$1" "$p.in.bed" "$p.bed" "$1" | bedtools sort -i > "$1.tmp" && mv "$1.tmp" "$1"
     done
 }
 
