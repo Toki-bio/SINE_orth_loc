@@ -13,8 +13,12 @@ a SINE copy matches several places in the other genome. The right flank is often
            other flank in the window next to each anchor where it must lie (mate rescue:
            same strand, right flank 3' of the left one at the distance of an empty site or
            of a SINE). Accept the placement whose two flanks score clearly better than any
-           other placement. Writes the accepted pairs as cluster lines
-           (M<n>R) in the same format as <sp1>-<sp2>_double, for alignment and ComPair.sh.
+           other placement. A site has one partner: when two copies resolve to the same
+           site of the other genome (or a copy's site is claimed from both sides), the
+           best-scoring pair is kept and the others are reported as shared_site:<pair>
+           (a duplication that carries the SINE in both copies, for instance). Writes the
+           accepted pairs as cluster lines (M<n>R) in the same format as <sp1>-<sp2>_double,
+           for alignment and ComPair.sh.
   account  One row per cluster of the run: class (double/multi/poly), number of loci and
            what became of it, including the outcome of the rescue.
 
@@ -379,29 +383,39 @@ def cmd_resolve(args):
             qlen = genomes[sp].length(qchrom)
             q_win = ((qchrom, max(0, qs - FLANK), min(qlen, qs + slop), '+') if qstrand == '+'
                      else (qchrom, max(0, qe - slop), min(qlen, qe + FLANK), '-'))
-            pairs.append((sp, q_win, tgt, t_win, cid, cl, gap))
+            pairs.append((ranked[0][0], sp, q_win, tgt, t_win, cid, cl, gap))
 
-    def anchor(w):
+    def anchor(sp, w):      # (genome, chrom, site position): the SINE/empty-site position of a window
         chrom, s, e, strand = w
-        return chrom, (e - slop if strand == '+' else s + slop)
+        return sp, chrom, (e - slop if strand == '+' else s + slop)
+
+    def same_site(a, b):
+        return a[0] == b[0] and a[1] == b[1] and abs(a[2] - b[2]) <= 60
 
     def outcome_of(cid, text):
         i = next(i for i, r in enumerate(report) if r[0] == cid)
         report[i] = report[i][:2] + (text,) + report[i][3:]
 
-    seen = []
+    # best placements first: a site is the partner of one copy only, the best-scoring one
+    pairs.sort(key=lambda p: (-p[0], p[5]))
+    seen = []       # (pair name, query site, target site) of the pairs written
     written = 0
     with open(args.out, 'w') as out:
-        for sp, q_win, tgt, t_win, cid, cl, gap in pairs:
-            a_q, a_t = anchor(q_win), anchor(t_win)
-            dup = None
-            for name, s_q, s_t in seen:   # the same pair found from both genomes
-                if ((s_q[0] == a_q[0] and abs(s_q[1] - a_q[1]) <= 60 and s_t[0] == a_t[0] and abs(s_t[1] - a_t[1]) <= 60) or
-                        (s_q[0] == a_t[0] and abs(s_q[1] - a_t[1]) <= 60 and s_t[0] == a_q[0] and abs(s_t[1] - a_q[1]) <= 60)):
+        for score, sp, q_win, tgt, t_win, cid, cl, gap in pairs:
+            a_q, a_t = anchor(sp, q_win), anchor(tgt, t_win)
+            dup = shared = None
+            for name, s_q, s_t in seen:
+                q_same, t_same = same_site(s_q, a_q) or same_site(s_t, a_q), same_site(s_t, a_t) or same_site(s_q, a_t)
+                if q_same and t_same:       # the same pair found from both genomes
                     dup = name
                     break
+                if q_same or t_same:        # one of its sites already has a partner
+                    shared = shared or name
             if dup:
                 outcome_of(cid, f'resolved:{dup}')
+                continue
+            if shared:
+                outcome_of(cid, f'shared_site:{shared}')
                 continue
             written += 1
             name = f'M{written}R'
