@@ -27,6 +27,10 @@ BOTHFLANKS=${BOTHFLANKS:-1}  # 1 (default): map the right flanks too and keep a 
                              # flank of the same copy maps on the same target sequence and strand, downstream of it
                              # (-30 to SINElength + 100 bp away), or where it cannot be tested (contig end, see
                              # both_flanks); 0: left flanks only
+ADAPT="${ADAPT-600 1000}"    # adaptive flank extension: flanks left unresolved (no hit, or MAPQ < ADAPT_MAPQ) are cut
+                             # again at these lengths (bp, in order) and mapped again; a better hit replaces the old
+                             # one, cut back to FLANK bp at its SINE side (adapt_flanks); ADAPT="" turns it off
+ADAPT_MAPQ=${ADAPT_MAPQ:-20} # MAPQ below which a flank hit counts as unresolved
 # A pair can be run in pieces (e.g. on CI runners or array jobs with a time limit), all in one directory
 # or with the directory copied between steps:
 #   STAGE=prep                 flank mapping and clustering; writes the batch files (PART*, MULTIPART*)
@@ -52,6 +56,7 @@ if ! { [ -f "$RESCUE_PY" ] && "$PYTHON" -c 'import sys; sys.exit(sys.version_inf
     echo "$PYTHON is not Python >= 3.7 or $RESCUE_PY is missing: set PYTHON=/path/to/python3.7+"; exit 1
 fi
 [[ "$FLANK" =~ ^[0-9]+$ ]] && (( FLANK >= 100 )) || { echo "FLANK must be a number >= 100"; exit 1; }
+for L in $ADAPT; do [[ "$L" =~ ^[0-9]+$ ]] && (( L > FLANK )) || { echo "ADAPT lengths must be numbers > FLANK"; exit 1; }; done
 # the cluster grouping step uses gawk-only features; with mawk it silently finds no loci
 if ! awk --version 2>/dev/null | grep -q "GNU Awk"; then echo "awk is not GNU awk (gawk): install gawk"; exit 1; fi
 
@@ -191,6 +196,43 @@ both_flanks() {  # $1: left-flank hits BED (filtered in place), $2: right-flank 
      mv "$1.tmp" "$1"
 }
 
+# ADAPT: flanks still unresolved (no hit, or best MAPQ < ADAPT_MAPQ) are cut again at each length L of ADAPT
+# from the source genome, under their FLANK-bp name, and mapped again; a hit with MAPQ >= ADAPT_MAPQ (and above
+# the old one) replaces the old hit, cut back to FLANK bp at the far side so that its SINE-side end is kept
+# (left flank: the hit end on +, the start on -; right flank: the start on +, the end on -) and tagged ",EXT=L"
+# in the MAPQ field. The hits BED is rewritten in place, so both_flanks and all later steps see FLANK-bp hits.
+adapt_flanks() {  # $1: hits BED (updated in place), $2: flank FASTA, $3: source genome, $4: source species,
+                  # $5: target genome, $6: l (left flanks) or r (right flanks)
+    local L p
+    for L in $ADAPT; do
+        p="${1%.bed}.ext$L"
+        awk -v Q=$ADAPT_MAPQ 'FNR==NR {split($5, m, /[=,]/); if (m[2]+0 >= Q) ok[$4]=1; next}
+         /^>/ {n=substr($1, 2); if (!(n in ok)) print n}' "$1" "$2" > "$p.names"
+        # L-bp flanks of the unresolved copies, named by the FLANK-bp left flank (as bedtools flank + getfasta -s)
+        awk -v F=$FLANK -v L=$L -v side=$6 'BEGIN {OFS="\t"} FILENAME==ARGV[1] {u[$1]=1; next}
+         FILENAME==ARGV[2] {len[$1]=$2; next}
+         {lo=($2>L)?$2-L:0; hi=($3+L<len[$1])?$3+L:len[$1]
+          if ($6=="+") {n=$1":"(($2>F)?$2-F:0)"-"$2"(+)"; s=(side=="l")?lo:$3; e=(side=="l")?$2:hi}
+          else {n=$1":"$3"-"(($3+F<len[$1])?$3+F:len[$1])"(-)"; s=(side=="l")?$3:lo; e=(side=="l")?hi:$2}
+          if ((n in u) && e>s) print $1, s, e, n, 0, $6}' "$p.names" $3.fai $4-"$SINEname"_uniq.bed > "$p.in.bed"
+        local nu=$(wc -l < "$p.names") nc=$(cut -f4 "$p.in.bed" | sort -u | wc -l); rm -f "$p.names"
+        (( nu == nc )) || echo "$1: L=$L: $nu unresolved flanks but $nc found in $4-${SINEname}_uniq.bed" >&2
+        (( nc > 0 )) || { echo "$1: L=$L: $nu unresolved, 0 improved (MAPQ >= $ADAPT_MAPQ), 0 newly placed" >&2; break; }
+        bedtools getfasta -s -name -bed "$p.in.bed" -fi $3 | sed '/^>/s/::.*//' > "$p.bnk"
+        map_flanks $5 "$p.bnk" "$p"
+        awk -v Q=$ADAPT_MAPQ -v F=$FLANK -v L=$L -v side=$6 -v nu=$nu -v B="$1" 'BEGIN {OFS="\t"}
+         function mq(x,  m) {split(x, m, /[=,]/); return m[2]+0}
+         FILENAME==ARGV[1] && FNR==NR {if (!($4 in old) || mq($5) > old[$4]) old[$4]=mq($5); next}
+         FILENAME==ARGV[2] {q=mq($5); if (q >= Q && (!($4 in old) || q > old[$4]) && (!($4 in nq) || q > nq[$4])) {
+           if (($6=="+") == (side=="l")) {if ($2 < $3-F) $2=$3-F} else {if ($3 > $2+F) $3=$2+F}  # SINE side kept
+           $5=$5",EXT="L; nq[$4]=q; hit[$4]=$0}; next}
+         !($4 in hit) {print}
+         END {for (n in hit) {print hit[n]; m++; k+=!(n in old)}
+              print B ": L=" L ": " nu " unresolved, " m+0 " improved (MAPQ >= " Q "), " k+0 " newly placed" > "/dev/stderr"}' \
+         "$1" "$p.bed" "$1" | bedtools sort -i > "$1.tmp" && mv "$1.tmp" "$1"
+    done
+}
+
 for g in $1 $2; do
     if [[ "$MAPPER" == minimap2 ]]; then mm2_index $g
     elif [ -f "$g.sa" ]; then echo $g bwa index found; else echo indexing $g; bwa index $g; fi
@@ -198,9 +240,13 @@ done
 sfx=""; [[ "$MAPPER" == minimap2 ]] && sfx=".mm2"
 map_flanks $1 "$sp2"_flanks_$FLANK.bnk "$sp2"_flanks-$sp1$sfx
 map_flanks $2 "$sp1"_flanks_$FLANK.bnk "$sp1"_flanks-$sp2$sfx
+adapt_flanks "$sp2"_flanks-$sp1$sfx.bed "$sp2"_flanks_$FLANK.bnk $2 $sp2 $1 l
+adapt_flanks "$sp1"_flanks-$sp2$sfx.bed "$sp1"_flanks_$FLANK.bnk $1 $sp1 $2 l
 if [[ "$BOTHFLANKS" == 1 ]]; then
     map_flanks $1 "$sp2"_rflanks_$FLANK.bnk "$sp2"_rflanks-$sp1$sfx
     map_flanks $2 "$sp1"_rflanks_$FLANK.bnk "$sp1"_rflanks-$sp2$sfx
+    adapt_flanks "$sp2"_rflanks-$sp1$sfx.bed "$sp2"_rflanks_$FLANK.bnk $2 $sp2 $1 r
+    adapt_flanks "$sp1"_rflanks-$sp2$sfx.bed "$sp1"_rflanks_$FLANK.bnk $1 $sp1 $2 r
     both_flanks "$sp2"_flanks-$sp1$sfx.bed "$sp2"_rflanks-$sp1$sfx.bed "$sp2"_rflanks_$FLANK.bed $1.fai
     both_flanks "$sp1"_flanks-$sp2$sfx.bed "$sp1"_rflanks-$sp2$sfx.bed "$sp1"_rflanks_$FLANK.bed $2.fai
 fi

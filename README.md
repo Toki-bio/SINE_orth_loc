@@ -118,6 +118,14 @@ consensus alone (`D.fa`, `aaa-D.bed`, `bbb-D.bed`): 70/330.
   at a contig end of its genome, tagged `RF=short` in the hit's MAPQ field) or the hit lies closer
   than SINElength + 100 + `MINRF` bp to the target contig end on the right-flank side (`RF=edge`).
   `BOTHFLANKS=0` maps the left flanks only (the behaviour before 2026-10-30).
+- `ADAPT` (`600 1000`) / `ADAPT_MAPQ` (20): adaptive flank extension. A flank left unresolved after
+  mapping (no hit, or MAPQ below `ADAPT_MAPQ`; typically a flank inside a repeat) is cut again from its
+  genome at each length of `ADAPT` in turn (shorter at a contig end) and mapped again with the same mapper
+  and index; a hit with MAPQ >= `ADAPT_MAPQ` (and above the old one) replaces the old hit. The new hit is
+  cut back to `FLANK` bp at its far side, keeping the SINE-side end, and tagged `EXT=<length>` in the
+  MAPQ field, so `both_flanks` and every later step see `FLANK`-bp hits as before. Applied to left and
+  right flanks in both directions before the two-flank check; files `<hits>.ext<L>.{in.bed,bnk,sam,bed}`.
+  `ADAPT=""` turns it off.
 
 Toy (`tests/simulate_flanks.py`, 450 events: 266 plain, 63 with a repeat as left flank, 55 segmental
 duplicates in bbb, 40 contig ends, 26 right-flank indels; `RESCUE=0 NEST=0`), events with the right
@@ -153,6 +161,15 @@ nothing (the toy repeat, ~70 copies, never reached the cutoff of 1000); `-w 1` a
 (bwa 26 and 275). Segmental duplicates stay bwa's: 14 vs 7 at ~16 %. No time cost (208-224 s per run for
 every variant). So `MAPPER=minimap2 MM2_OPTS="-x sr -k 11 -w 3 -p 0.5 -N 50"` is the minimap2 setting
 (the default `MM2_OPTS`); bwa remains the default mapper.
+
+Adaptive flank extension (2026-10-30, `ADAPT="600 1000"`, `ADAPT_MAPQ=20`, both flanks, 300 bp, `RESCUE=1
+NEST=1`; events right, ADAPT off -> on; the off runs reproduce the previous runs exactly): at ~6 % bwa 430 ->
+432 and minimap2 429 -> 432 (repeat flanks 62 -> 63, segmental duplicates 54 -> 55 / 53 -> 55); at ~16 % bwa
+302 -> 416 (repeat flanks 26 -> 59, plain 196 -> 261, segmental duplicates 41 -> 52, contig ends 23 -> 25,
+right-flank indels 16 -> 19) and minimap2 397 -> 410 (repeat flanks 35 -> 44, segmental duplicates 52 -> 54).
+No wrong status or wrong pair. bwa at ~16 % gains 2 paralog rows (segmental duplicates, from the rescue;
+the same two events minimap2 pairs with the duplicate with or without ADAPT, which keeps its 2). Every
+converted hit is 300 bp.
 
 ### minimap2 settings, from the code
 
@@ -210,7 +227,10 @@ hits of each flank serve as anchors, and the other
 flank is aligned in the window next to each anchor where it must lie (same strand, at
 the distance of an empty site or of a SINE). The placement whose two flanks score clearly
 best (`--margin`, default 20) is accepted and checked with ComPair.sh like a double
-(clusters `M<n>R`); ties are reported as ambiguous instead of guessed.
+(clusters `M<n>R`); ties are reported as ambiguous instead of guessed. A site has one partner:
+placements are taken best first, and a copy whose site, or whose target site, already belongs to
+an accepted pair is reported as `shared_site:<pair>` instead of paired (a duplication carrying the
+SINE in both copies gives one orthologous pair and one `shared_site` copy, not two pairs to one site).
 
 - `clusters_<sp1>-<sp2>.tsv` — every cluster: class, number of loci, fate (resolved and
   how, rejected by ComPair.sh, unresolved) and the rescue outcome of its copies
