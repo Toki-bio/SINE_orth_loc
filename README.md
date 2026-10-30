@@ -226,6 +226,7 @@ genomes (rsi 2.12 Gbp, rfe 2.08 Gbp; 2026-10-28 run):
   | minimap2, `ADAPT=""` | 51,037 | 48,806 | 1,201 | 1,030 | 90 min + 2 x 38 s index = ~91 min |
   | minimap2, `ADAPT="600 1000"` | 51,090 | 48,944 | 1,023 | 1,123 | ~110 min |
   | minimap2, `ADAPT` + stop at copies | 51,083 | 48,939 | 1,022 | 1,122 | ~114 min |
+  | bwa, `ADAPT` + stop at copies | 51,226 | 49,019 | 1,141 | 1,066 | 88 min + 2 x 34 min `bwa index` = ~2 h 35 |
 
   The two mappers alone are equal within 0.1 %; the adaptive extension (about 5,000 of 50,000 flanks per
   direction unresolved at 300 bp; 600 bp resolved ~3,100 of them, 1,000 bp ~500 more, 35-86 unmapped flanks
@@ -235,6 +236,10 @@ genomes (rsi 2.12 Gbp, rfe 2.08 Gbp; 2026-10-28 run):
   (20-24 of them to nothing) and cost 20 rows (17 agreeing) for 4 gained: the price of never mapping a
   flank that contains another copy. The rescue's one-partner rule fired 59 times. Each flank mapping with
   the prebuilt `.mmi` took 5 s; the pipeline time is the alignments, not the mapping.
+  With the adaptive extension both mappers again land within 0.2 % of each other (rows only in the bwa run:
+  554, 235 agree / 249 disagree; only in the minimap2 run: 411, 146 / 151), so the mapper choice is a
+  question of index time and memory (bwa: 34 min per genome, ~5 GB; minimap2: ~40 s, 19-27 GB while
+  indexing), not of results.
 
 ## Multi-copy loci (multimappers)
 
