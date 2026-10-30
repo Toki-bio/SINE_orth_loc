@@ -20,8 +20,9 @@ NEST=${NEST:-1}              # 0: skip nested/close/satellite analysis (sine_nes
 NEST_PY="$(dirname "$(readlink -f "$0")")/sine_nest.py"
 PYTHON=${PYTHON:-python3}    # Python >= 3.7 (e.g. PYTHON=/usr/local/bin/python3.12 where python3 is older)
 FLANK=${FLANK:-300}          # flank length (bp) mapped to the other genome; also the distance below which copies form one locus
-MAPPER=${MAPPER:-bwa}        # flank mapper: bwa (bwa mem) or minimap2 (minimap2 -a $MM2_OPTS); rescue and nest use bwa
-MM2_OPTS=${MM2_OPTS:--x sr}  # minimap2 options, e.g. "-x sr", "-x asm20", "-x sr -k 11 -w 5"
+MAPPER=${MAPPER:-bwa}        # mapper for the flanks, the rescue and the nested-locus test: bwa (bwa mem, needs
+                             # bwa index) or minimap2 (minimap2 -a $MM2_OPTS; a .mmi index is built once per genome)
+MM2_OPTS=${MM2_OPTS:--x sr -k 11 -w 3 -p 0.5 -N 50}  # minimap2 options (README: minimap2 settings)
 BOTHFLANKS=${BOTHFLANKS:-1}  # 1 (default): map the right flanks too and keep a left-flank hit only where the right
                              # flank of the same copy maps on the same target sequence and strand, downstream of it
                              # (-30 to SINElength + 100 bp away), or where it cannot be tested (contig end, see
@@ -40,7 +41,8 @@ if ! [[ "$SHARD" =~ ^[0-9]+/[0-9]+$ ]] || (( ${SHARD%/*} < 1 || ${SHARD%/*} > ${
     echo "SHARD must be k/N with 1 <= k <= N"; exit 1
 fi
 
-for tool in mafft esl-alipid seqkit bedtools samtools sam2bed bwa ComPair.sh; do
+case "$MAPPER" in bwa|minimap2) ;; *) echo "MAPPER must be bwa or minimap2"; exit 1;; esac
+for tool in mafft esl-alipid seqkit bedtools samtools sam2bed "$MAPPER" ComPair.sh; do
     if ! command -v "$tool" > /dev/null 2>&1; then
     echo "$tool: not found"
     exit 1
@@ -49,8 +51,6 @@ done
 if ! { [ -f "$RESCUE_PY" ] && "$PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 7))' 2> /dev/null; }; then
     echo "$PYTHON is not Python >= 3.7 or $RESCUE_PY is missing: set PYTHON=/path/to/python3.7+"; exit 1
 fi
-case "$MAPPER" in bwa) ;; minimap2) command -v minimap2 > /dev/null || { echo "minimap2: not found"; exit 1; };;
-    *) echo "MAPPER must be bwa or minimap2"; exit 1;; esac
 [[ "$FLANK" =~ ^[0-9]+$ ]] && (( FLANK >= 100 )) || { echo "FLANK must be a number >= 100"; exit 1; }
 # the cluster grouping step uses gawk-only features; with mawk it silently finds no loci
 if ! awk --version 2>/dev/null | grep -q "GNU Awk"; then echo "awk is not GNU awk (gawk): install gawk"; exit 1; fi
@@ -135,16 +135,35 @@ for sp in $sp1 $sp2; do
     fi
 done
 
-# mapping flank sequences (bwa mem, or minimap2 with MAPPER=minimap2); hits to BED: target, start, end,
-# flank name, MAPQ/LENGTH/AS, strand (SAM records with fewer than 100 bases of SEQ are left out)
+# minimap2 index of a genome, built once per run directory with the k-mer and window settings of MM2_OPTS (a .mmi
+# fixes k, w and HPC and overrides the command line; about 9 GB and 1-2 min for a 2 Gbp genome at -k 11 -w 3),
+# rebuilt when MM2_OPTS changed
+mm2_index() {  # $1: genome; writes $1.mmi and $1.mmi.opts
+    if [ -f "$1.mmi" ] && [ "$(cat "$1.mmi.opts" 2> /dev/null)" == "$MM2_OPTS" ]; then echo "$1.mmi found"; else
+        echo "indexing $1 (minimap2 $MM2_OPTS)"
+        minimap2 $MM2_OPTS -t $THREADS -d "$1.mmi" "$1" && echo "$MM2_OPTS" > "$1.mmi.opts"
+    fi
+}
+
+# mapping flank sequences, one placement per flank (bwa mem, or minimap2 with MAPPER=minimap2); hits to BED:
+# target, start, end, flank name, MAPQ/LENGTH/AS, strand (SAM records with fewer than 100 bases of SEQ are left out)
 map_flanks() {  # $1: genome, $2: flank FASTA, $3: output prefix (writes $3.sam and $3.bed)
     if [ -f "$3.sam" ]; then echo "$3.sam found"; else
         echo "mapping $2 on $1 ($MAPPER)"
-        if [[ "$MAPPER" == minimap2 ]]; then minimap2 -a --secondary=no -t $THREADS $MM2_OPTS "$1" "$2" > "$3.sam"
+        if [[ "$MAPPER" == minimap2 ]]; then minimap2 -a --secondary=no -t $THREADS $MM2_OPTS "$1.mmi" "$2" > "$3.sam"
         else bwa mem -t $THREADS "$1" "$2" > "$3.sam"; fi
     fi
-    sam2bed < "$3.sam" | awk '{if (length($12)>99) print $1,$2,$3,$4,"MAPQ="$5",LENGTH="length($12)","$16,$6}' |
-     awk '{sub(/:i:/,"=",$5)}1' OFS="\t" | bedtools sort -i > "$3.bed"
+    sam2bed < "$3.sam" | awk 'BEGIN {OFS="\t"} length($12) > 99 {as="AS:i:NA"
+     for (i=14; i<=NF; i++) if ($i ~ /^AS:i:/) {as=$i; break}
+     sub(/:i:/, "=", as); print $1, $2, $3, $4, "MAPQ="$5",LENGTH="length($12)","as, $6}' | bedtools sort -i > "$3.bed"
+}
+
+# all placements of each flank (multi-copy clusters, compound loci): bwa mem -a, or minimap2 with its secondary
+# hits printed (the sr preset hides them), up to 50 per primary with a chain score >= 0.5 x the primary's
+# (-N 50; -p 0.5 of the sr preset, the counterpart of bwa's -D 0.5); same flags as rescue_multi.py mapper_command()
+map_all() {  # $1: genome, $2: FASTA, $3: output SAM
+    if [[ "$MAPPER" == minimap2 ]]; then minimap2 -a -N 50 -t $THREADS $MM2_OPTS --secondary=yes "$1.mmi" "$2" > "$3"
+    else bwa mem -a -t $THREADS "$1" "$2" > "$3"; fi
 }
 
 # BOTHFLANKS=1: keep a left-flank hit only where the right flank of the same copy has a hit on the same target
@@ -172,11 +191,10 @@ both_flanks() {  # $1: left-flank hits BED (filtered in place), $2: right-flank 
      mv "$1.tmp" "$1"
 }
 
-if [[ "$MAPPER" == bwa || "$RESCUE" == 1 || "$NEST" == 1 ]]; then
-    for g in $1 $2; do
-        if [ -f "$g.sa" ]; then echo $g bwa index found; else echo indexing $g; bwa index $g; fi
-    done
-fi
+for g in $1 $2; do
+    if [[ "$MAPPER" == minimap2 ]]; then mm2_index $g
+    elif [ -f "$g.sa" ]; then echo $g bwa index found; else echo indexing $g; bwa index $g; fi
+done
 sfx=""; [[ "$MAPPER" == minimap2 ]] && sfx=".mm2"
 map_flanks $1 "$sp2"_flanks_$FLANK.bnk "$sp2"_flanks-$sp1$sfx
 map_flanks $2 "$sp1"_flanks_$FLANK.bnk "$sp1"_flanks-$sp2$sfx
@@ -554,8 +572,8 @@ fi
 
 # Multi-copy clusters (3-10 loci, of which the multi stage keeps at most one pair, and
 # clusters of more than 10 loci) are usually due to a repetitive left flank. For every SINE
-# copy in them that is not yet in a final alignment, map left and right flanks with
-# bwa mem -a and accept a target only where both flanks agree on one placement
+# copy in them that is not yet in a final alignment, map left and right flanks with all their
+# placements (map_all) and accept a target only where both flanks agree on one placement
 # (rescue_multi.py); accepted pairs are aligned and checked like doubles (clusters M<n>R).
 : > stat
 if [[ "$RESCUE" == 1 ]]; then
@@ -563,8 +581,8 @@ if [[ "$RESCUE" == 1 ]]; then
     touch "$sp1-$sp2"_multi "$sp1-$sp2"_poly
     "$PYTHON" "$RESCUE_PY" prepare --clusters "$sp1-$sp2"_multi "$sp1-$sp2"_poly --resolved statpairs \
      --copies "$sp1=$sp1-${SINEname}_uniq.bed" "$sp2=$sp2-${SINEname}_uniq.bed" --genome "$sp1=$1" "$sp2=$2" --sine-length $SINElength --flank $FLANK --out rescue
-    [ -s rescue_"$sp1".fa ] && bwa mem -a -t $THREADS $2 rescue_"$sp1".fa > rescue_"$sp1".sam
-    [ -s rescue_"$sp2".fa ] && bwa mem -a -t $THREADS $1 rescue_"$sp2".fa > rescue_"$sp2".sam
+    [ -s rescue_"$sp1".fa ] && map_all $2 rescue_"$sp1".fa rescue_"$sp1".sam
+    [ -s rescue_"$sp2".fa ] && map_all $1 rescue_"$sp2".fa rescue_"$sp2".sam
     "$PYTHON" "$RESCUE_PY" resolve --prep rescue --sam "$sp1=rescue_$sp1.sam" "$sp2=rescue_$sp2.sam" \
      --genome "$sp1=$1" "$sp2=$2" --sine-length $SINElength --flank $FLANK --out "$sp1-$sp2"_rescue --report rescue_"$sp1-$sp2".tsv
     awk 'NR%100==1{x="RPART"++i;}{print > x}' "$sp1-$sp2"_rescue
@@ -642,10 +660,13 @@ if [[ "$NEST" == 1 ]]; then
             [[ -s nest_"$sp".loci.tsv ]] || "$PYTHON" "$NEST_PY" scan --genome "$g" --copies "$sp-$SINEname".bed \
                 --library "$SINEfa" -o nest_"$sp" --close $FLANK --cpu "$THREADS"
         done
+        idx=""; [[ "$MAPPER" == minimap2 ]] && idx=.mmi
         "$PYTHON" "$NEST_PY" orth --a "$sp1=$1" --b "$sp2=$2" --scan nest_"$sp1" -o nested_"$sp1"-in-"$sp2".tsv \
-            --sine-length "$SINElength" --flank $FLANK --threads "$THREADS"
+            --sine-length "$SINElength" --flank $FLANK --threads "$THREADS" \
+            --mapper "$MAPPER" --mapper-opts "$MM2_OPTS" --index "$2$idx"
         "$PYTHON" "$NEST_PY" orth --a "$sp2=$2" --b "$sp1=$1" --scan nest_"$sp2" -o nested_"$sp2"-in-"$sp1".tsv \
-            --sine-length "$SINElength" --flank $FLANK --threads "$THREADS"
+            --sine-length "$SINElength" --flank $FLANK --threads "$THREADS" \
+            --mapper "$MAPPER" --mapper-opts "$MM2_OPTS" --index "$1$idx"
         "$PYTHON" "$NEST_PY" supersede orth_"$sp1"-"$sp2".tsv --scan "$sp1=nest_$sp1" "$sp2=nest_$sp2" \
             --nested nested_"$sp1"-in-"$sp2".tsv nested_"$sp2"-in-"$sp1".tsv --flank $FLANK -o orth.tmp \
             && mv orth.tmp orth_"$sp1"-"$sp2".tsv && mv orth.tmp.superseded orth_"$sp1"-"$sp2".superseded.tsv

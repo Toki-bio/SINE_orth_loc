@@ -107,8 +107,11 @@ consensus alone (`D.fa`, `aaa-D.bed`, `bbb-D.bed`): 70/330.
 
 - `FLANK` (300): flank length; copies closer than this form one locus; passed to the rescue and the
   nested-locus steps.
-- `MAPPER` (bwa) / `MM2_OPTS` (`-x sr`): the left-flank mapper (`minimap2 -a --secondary=no`). Rescue and
-  the nested-locus step still use bwa.
+- `MAPPER` (bwa) / `MM2_OPTS` (`-x sr -k 11 -w 3 -p 0.5 -N 50`): the mapper of the flanks
+  (`minimap2 -a --secondary=no`), of the rescue and of the nested-locus test (`minimap2 -a --secondary=yes
+  -N 50`, the counterpart of `bwa mem -a`). With minimap2 no bwa index is needed: a `.mmi` index is built
+  once per genome in the run directory (`<genome>.mmi`, tagged with `MM2_OPTS` in `<genome>.mmi.opts` and
+  rebuilt when the options change; about 9 GB and 1-2 min for a 2 Gbp genome).
 - `BOTHFLANKS` (1): maps the right flanks too; a left-flank hit is kept only where the right flank of
   the same copy maps on the same target sequence and strand, -30 to SINElength + 100 bp downstream,
   or where that cannot be tested: the copy's own right flank is shorter than `MINRF` (100 bp; a copy
@@ -148,8 +151,53 @@ nothing (the toy repeat, ~70 copies, never reached the cutoff of 1000); `-w 1` a
 `-k 13 -w 5` equals bwa at ~6 % (385, repeat flanks 62) but collapses at ~16 % (323, 26);
 `-p 0.5 -N 50` is the best: repeat flanks 62 (= bwa) and all 384 (bwa 385) at ~6 %, 35 and 352 at ~16 %
 (bwa 26 and 275). Segmental duplicates stay bwa's: 14 vs 7 at ~16 %. No time cost (208-224 s per run for
-every variant). So `MAPPER=minimap2 MM2_OPTS="-x sr -k 11 -w 3 -p 0.5 -N 50"` is the index-free setting
-to use; bwa remains the default mapper and the rescue/nested steps still need the bwa index.
+every variant). So `MAPPER=minimap2 MM2_OPTS="-x sr -k 11 -w 3 -p 0.5 -N 50"` is the minimap2 setting
+(the default `MM2_OPTS`); bwa remains the default mapper.
+
+### minimap2 settings, from the code
+
+Why these flags, from minimap2 2.31 (`file:line`) and bwa 0.7.19, with the index measured on the bat
+genomes (rsi 2.12 Gbp, rfe 2.08 Gbp; 2026-10-28 run):
+
+- `-x sr -k 11 -w 3`: the `sr` preset keeps k = 21, w = 11 unless overridden; a 300 bp flank at 84 %
+  identity shares about one 21-mer minimizer with its ortholog (280 x 0.84^21 x 2/12) but about 20
+  11-mer minimizers at w = 3, and a chain needs 2 anchors and a score of 25 (`-n 2 -m 25`,
+  `options.c:151-168`, `lchain.c:52,67`). That is the collapse of plain `-x sr` at ~16 % in the table
+  above (101 / 22) and its absence with `-k 11 -w 3`.
+- Repeats in the flanks: `sr` fixes the seed-occurrence cutoff at 1000 (`mid_occ`, `options.c:166`; `-f`
+  is ignored). On a 2 Gbp genome at k 11 w 3 the index holds 1.8 M distinct minimizers with 600
+  occurrences on average (0.4 % singletons), so a flank minimizer inside a repeat, or any 11-mer more
+  common than average, is dropped (`seed.c:109-111`), the chain forms from the rarer half, and a flank
+  with no chain is re-seeded at 5000 occurrences (`map.c:293-316`). The `rl:i` SAM tag gives the flank
+  bases covered by dropped seeds. This is why the toy's `-f 0 -U 1000000` changed nothing and why the
+  real pair maps the same number of flanks as bwa (46,785 vs 46,806 of 50,776 rsi left flanks on rfe).
+- `-p 0.5 -N 50`: both act on chain scores before alignment (`map.c:206-213`, `hit.c:265-267`); the
+  candidates kept are then aligned and the primary is chosen again by alignment score (`map.c:219-223`,
+  `align.c:1118`). More candidates through the DP means a locus whose chain is weaker but whose alignment
+  is better can win; `--secondary=no` only stops the printing (`map.c:612-613`). Hence the gain on repeat
+  flanks (26 -> 35 at ~16 %) at no time cost.
+- Rescue and nested-locus test: every placement of a flank is wanted. bwa `-a` prints the secondaries that
+  score >= 0.5 x the primary (`-D 0.5`, `bwamem.c:1050`), flag 256, SEQ `*`, with CIGAR and `AS`;
+  minimap2 prints at most `-N` secondaries with a chain score >= `-p` x the primary's (`hit.c:265-267`),
+  flag 256, SEQ `*`, with CIGAR and `AS` (`format.c:556,587`), once `--secondary=yes` lifts the preset's
+  `MM_F_NO_PRINT_2ND`. The rescue uses the 10 best hits of each flank as anchors and re-aligns both flanks
+  itself; the nested-locus test keeps a pair only when it leads by 5 % in `AS`. `AS` is on a different
+  scale in the two mappers (`-A 2 -B 8` under `sr`, `-A 1 -B 4` in bwa) and is only ever compared within
+  one run, never against a threshold.
+- Port test on the flank toy (2026-10-30, both flanks, 300 bp, rescue and nested-locus test on, each mapper
+  end to end): events right 430 (bwa) / 429 (minimap2) of 450 at ~6 %, 302 / 397 at ~16 %; repeat flanks
+  62 / 62 and 26 / 35; segmental duplicates 54 / 53 and 41 / 52. Both mappers produce the same kind of
+  wrong rows there (45 / 45 and 27 / 44 events), all of one type: in a duplication that carries the SINE
+  in both copies, the rescue pairs the duplicate's copy with the one site of the other genome too, so one
+  site gets two partners. This comes from the rescue, which has no "one partner per site" rule, not from
+  the mapper; before the rescue existed these events were simply unresolved (9-14 right). The rescue SAM
+  of minimap2 held one secondary hit per primary on the toy (62 / 62), bwa 37 / 38. Run times equal
+  (116-147 s).
+- Index: a `.mmi` stores k, w and HPC and overrides the command line with a warning (`index.c:626-627`),
+  so the index is tagged with `MM2_OPTS`. Building it took 40-85 s and 19-27 GB of memory per bat genome
+  (the whole flank mapping of 50 k flanks took 53-110 s with 20 threads, index included); `bwa index` of
+  the same genome took 34 min (BWT construction 23 min) for 3.7 GB of index files. Supplementary pieces (`-x sr` splits at indels wider than its
+  band of 100) are left out by the pipeline in both mappers (flag 2048), as before.
 
 ## Multi-copy loci (multimappers)
 
@@ -157,7 +205,8 @@ When a flank matches several places, loci join into clusters of 3–10 (multi) o
 (poly). The multi stage keeps at most one pair per cluster; poly clusters were never
 analysed. Since v2.1, every copy of a multi-copy cluster that is not yet in a final
 alignment goes through a **two-flank rescue** (`rescue_multi.py`): left and right flanks
-are mapped with `bwa mem -a`, the best hits of each flank serve as anchors, and the other
+are mapped with all their placements (`bwa mem -a`, or minimap2 with its secondary hits), the best
+hits of each flank serve as anchors, and the other
 flank is aligned in the window next to each anchor where it must lie (same strand, at
 the distance of an empty site or of a SINE). The placement whose two flanks score clearly
 best (`--margin`, default 20) is accepted and checked with ComPair.sh like a double

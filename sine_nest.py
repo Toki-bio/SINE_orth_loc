@@ -19,7 +19,7 @@
   orth  --a SP=G.fa --b SP=G.fa --scan PREFIX -o ORTH.tsv [--sine-length L] [--threads N]
         Orthology for the elements of compound loci of genome a (nested, close, dimer: from scan PREFIX).
         The flanks *outside* the whole locus (unique sequence, not the host SINE) are placed in genome b as
-        a concordant pair (bwa mem -a); in the b window between them each element is tested by its left
+        a concordant pair (bwa mem -a, or minimap2 with secondary hits; --mapper); in the b window between them each element is tested by its left
         and right junctions (present) against its empty-site junction with one TSD copy removed (absent).
         Writes rows in the orth_<a>-<b>.tsv format (status SINE/PM, cluster N<k>R) for sine_registry.py,
         plus ORTH.tsv.report with the outcome per element.
@@ -54,7 +54,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rescue_multi import Fasta, read_hits, local_align, revcomp  # noqa: E402
+from rescue_multi import Fasta, read_hits, local_align, mapper_command, revcomp  # noqa: E402
 
 MIN_PIECE = 20          # TinT: elements shorter than 20 nt are ignored
 JOIN_TOL = 30           # consensus coordinates of two host pieces may overlap (TSD) or gap by this much
@@ -465,8 +465,8 @@ def cmd_orth(args):
                     fh.write(f'>{lid}|L\n{left}\n>{lid}|R\n{right}\n')
         sam = os.path.join(tmp, 'flanks.sam')
         with open(sam, 'w') as out:
-            subprocess.run(['bwa', 'mem', '-a', '-t', str(args.threads), fa_b, fq], check=True, stdout=out,
-                           stderr=subprocess.DEVNULL)
+            subprocess.run(mapper_command(args.mapper, args.index or fa_b, fq, args.threads, args.mapper_opts),
+                           check=True, stdout=out, stderr=subprocess.DEVNULL)
         hits = read_hits(sam)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -734,7 +734,10 @@ def main():
     s.set_defaults(func=cmd_scan)
     o = sub.add_parser('orth', help='orthology of the elements of compound loci (outer flanks + junction tests)')
     o.add_argument('--a', required=True, metavar='SP=FASTA', help='genome with the compound loci (scan PREFIX)')
-    o.add_argument('--b', required=True, metavar='SP=FASTA', help='genome searched (bwa index required)')
+    o.add_argument('--b', required=True, metavar='SP=FASTA', help='genome searched (bwa index, or --index for minimap2)')
+    o.add_argument('--mapper', default='bwa', choices=['bwa', 'minimap2'], help='flank mapper [bwa]')
+    o.add_argument('--mapper-opts', default='', help='minimap2 options, e.g. "-x sr -k 11 -w 3 -p 0.5 -N 50"')
+    o.add_argument('--index', help='minimap2 .mmi index of genome b (built on the fly from the FASTA if absent)')
     o.add_argument('--scan', required=True, metavar='PREFIX', help='scan output prefix of genome a')
     o.add_argument('-o', '--output', required=True)
     o.add_argument('--sine-length', type=int, default=360, help='consensus length, for window strings [360]')

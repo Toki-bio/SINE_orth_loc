@@ -7,7 +7,8 @@ a SINE copy matches several places in the other genome. The right flank is often
 
   prepare  For every annotated copy (the *_uniq.bed copies the run started from) that lies
            in a multi-copy cluster and is not yet part of a final alignment, write its left and right 300-bp flanks (SINE
-           orientation) as FASTA, one file per genome, to be mapped with bwa mem -a.
+           orientation) as FASTA, one file per genome, to be mapped with every placement
+           reported (bwa mem -a, or minimap2 with secondary hits: mapper_command()).
   resolve  From the SAM files, take the best hits of each flank as anchors and align the
            other flank in the window next to each anchor where it must lie (mate rescue:
            same strand, right flank 3' of the left one at the distance of an empty site or
@@ -24,6 +25,7 @@ import argparse
 import collections
 import os
 import re
+import shlex
 import sys
 
 FLANK = 300
@@ -190,8 +192,22 @@ def cmd_prepare(args):
 CIGAR = re.compile(r'(\d+)([MIDNSHP=X])')
 
 
+def mapper_command(mapper, ref, query, threads, opts=''):
+    """Command that writes every placement of each query sequence as SAM (primary and secondary hits, with
+    CIGAR and AS): bwa mem -a, or minimap2 with its secondary hits printed (the sr preset hides them), up to
+    50 per primary with a chain score >= 0.5 x the primary's (-N 50; -p 0.5 of the sr preset, the counterpart
+    of bwa's -D 0.5). ref is the genome FASTA (bwa index built), or the .mmi index for minimap2. The same
+    flags as map_all() in SINE_orth_loc.bash."""
+    if mapper == 'minimap2':
+        return ['minimap2', '-a', '-N', '50', '-t', str(threads)] + shlex.split(opts) + ['--secondary=yes', ref, query]
+    if mapper == 'bwa':
+        return ['bwa', 'mem', '-a', '-t', str(threads), ref, query]
+    die(f'mapper must be bwa or minimap2, not {mapper}')
+
+
 def read_hits(sam):
-    """{read name: [(chrom, start, end, strand, score)]} for primary and secondary hits."""
+    """{read name: [(chrom, start, end, strand, score)]} for primary and secondary hits (bwa or minimap2 SAM:
+    flag 256 lines carry CIGAR and AS in both; their SEQ is * and is not needed)."""
     hits = collections.defaultdict(list)
     with open(sam) as fh:
         for line in fh:
@@ -488,7 +504,8 @@ def main():
     r = sub.add_parser('resolve')
     r.add_argument('--prep', required=True, help='prefix given to prepare')
     r.add_argument('--sam', nargs=2, required=True, metavar='SP=SAM',
-                   help='bwa mem -a output of the flanks of species SP mapped to the other genome')
+                   help='SAM of the flanks of species SP mapped to the other genome with all placements '
+                        '(bwa mem -a, or minimap2 with secondary hits; see mapper_command)')
     r.add_argument('--genome', nargs=2, required=True, metavar='SP=FASTA', help='genome 1 first (pairs are written in this order)')
     r.add_argument('--sine-length', type=int, required=True)
     r.add_argument('--flank', type=int, default=300, help='flank length [300]')
