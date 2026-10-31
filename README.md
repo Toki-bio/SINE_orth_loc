@@ -77,6 +77,13 @@ Bank mode starts when the consensus file has more than one sequence. It changes 
   mode, rescue windows) the junction is where the reference row's first residue aligns, measured
   after ComPair's short-left-flank fix. A reference longer than the copy (partial copy, composite)
   starts anywhere in the left flank; this put ~5 % of rsi–rfe anchors >50 bp off before 2026-10-29.
+- **Flank support (`flank_mapq`, `support`).** For flank-cluster rows (`C<n>R`, incl. `MISSING`),
+  `flank_mapq` is the lowest MAPQ of the flank hits that formed the cluster and `support` is
+  `reciprocal` when the cluster has hits mapped in both directions (sp1 on sp2 and sp2 on sp1),
+  else `single`. Rescue rows (`M`) have an empty `flank_mapq` and `support` `rescue`; nested rows
+  (`N`) `nested`. MAPQ scales differ between minimap2 and bwa; a low value means the locus rests
+  on a repetitive flank. On rsi–rfe, 659 of 51,083 flank rows had `flank_mapq` < 20, and their
+  copy-check disagree rate was 33 % against 4.6 % for the rest.
 - **Summary.** `orth_summary.py` (run at the end) writes `summary_<sp1>-<sp2>.tsv`: per reference,
   input copies per genome, loci by row type and status, shared %, and the median (10–90 %) identity
   of copies to the reference, between the two copies of shared loci, and of the left flanks.

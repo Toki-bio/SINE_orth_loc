@@ -685,8 +685,13 @@ touch refs_chosen
 awk -v sp1=$sp1 -v sp2=$sp2 -v SINEname=$SINEname -v RC=refs_chosen -F'\t' '
  BEGIN {OFS="\t"; n=split("LF FL LFcp RFlength FR RFcp OneTwo OneSINE TwoSINE SL SO ST FI",K," ")
      while ((getline l < RC) > 0) {split(l, x, "\t"); ref[x[1]]=x[2]}
-     printf "alignment\tcluster\tstatus\tspecies1\tlocus1\tsine1\tspecies2\tlocus2\tsine2"; for (i=1;i<=n;i++) printf "\t%s", K[i]; print "\tanchor1\tanchor2\treference"}
+     printf "alignment\tcluster\tstatus\tspecies1\tlocus1\tsine1\tspecies2\tlocus2\tsine2"; for (i=1;i<=n;i++) printf "\t%s", K[i]; print "\tanchor1\tanchor2\treference\tflank_mapq\tsupport"}
  FILENAME==ARGV[1] {g1[$1]; next}
+ # flank_mapq/support of cluster C<n>R: line n of the clusters file (space-separated labels), MAPQ and origin of
+ # every hit with those labels in clu_<sp1>.bed and clu_<sp2>.bed
+ FILENAME==ARGV[2] {clab[FNR]=$0; next}
+ FILENAME==ARGV[3] || FILENAME==ARGV[4] {q=""; if (match($5, /MAPQ=[0-9]+/)) q=substr($5, RSTART+5, RLENGTH-5)+0
+     if (q!="" && (!($7 in lmq) || q<lmq[$7])) lmq[$7]=q; lorg[$7 SUBSEP $8]=1; next}
  FILENAME ~ /(^|\/)stat_/ {split($0,f," "); b=f[1]; sub(/^\.\//,"",b); delete kv
      for (i=3;i<=length(f);i++) {p=index(f[i],"="); kv[substr(f[i],1,p-1)]=substr(f[i],p+1)}
      m=""; for (i=1;i<=n;i++) m=m"\t"((K[i] in kv) ? kv[K[i]] : "")
@@ -696,11 +701,18 @@ awk -v sp1=$sp1 -v sp2=$sp2 -v SINEname=$SINEname -v RC=refs_chosen -F'\t' '
      c1=$2; sub(/:[0-9]+-[0-9]+\([+-]\)$/,"",c1); c2=$3; sub(/:[0-9]+-[0-9]+\([+-]\)$/,"",c2)
      if (st=="contig_end") {s1=(edge[$1]==0)?"M":"?"; s2=(edge[$1]==1)?"M":"?"; st="MISSING"}
      else {s1=(st=="PM"||st=="SINE")?1:0; s2=(st=="MP"||st=="SINE")?1:0}
-     print $1,cl,st,((c1 in g1)?sp1:sp2),$2,s1,((c2 in g1)?sp1:sp2),$3,s2 met[$1], anchor($2,ls1[$1]), anchor($3,ls2[$1]), ((cl in ref)?ref[cl]:SINEname)}
+     print $1,cl,st,((c1 in g1)?sp1:sp2),$2,s1,((c2 in g1)?sp1:sp2),$3,s2 met[$1], anchor($2,ls1[$1]), anchor($3,ls2[$1]), ((cl in ref)?ref[cl]:SINEname), support(cl)}
+ # "flank_mapq<TAB>support": C rows min MAPQ of the cluster hits and reciprocal/single; M rows "" and rescue
+ function support(cl,   k, w, nw, i, q, o1, o2) {if (cl ~ /^M/) return "\trescue"
+     if (cl !~ /^C[0-9]+R$/) return "\t"; k=substr(cl, 2, length(cl)-2)+0
+     q=""; o1=0; o2=0; nw=split(clab[k], w, " ")
+     for (i=1;i<=nw;i++) {if ((w[i] in lmq) && (q=="" || lmq[w[i]]<q)) q=lmq[w[i]]
+         if ((w[i] SUBSEP sp1"_mapped_on_"sp2) in lorg) o1=1; if ((w[i] SUBSEP sp2"_mapped_on_"sp1) in lorg) o2=1}
+     return q "\t" ((o1 && o2) ? "reciprocal" : "single")}
  # insertion junction in genome coordinates: window start + residues before the SINE (+), window end - them (-)
  function anchor(locus, ls,   m) {if (ls=="") return ""; match(locus, /:([0-9]+)-([0-9]+)\(([+-])\)$/, m)
      return (m[3]=="+") ? m[1]+ls : m[2]-ls}' \
- "$1.fai" stat_doubles_"$sp1"-"$sp2" stat_multi_"$sp1"-"$sp2" stat_rescue_"$sp1"-"$sp2" statpairs > orth_"$sp1"-"$sp2".tsv
+ "$1.fai" "$sp1-$sp2"_clust.uniq.output.clusters clu_"$sp1".bed clu_"$sp2".bed stat_doubles_"$sp1"-"$sp2" stat_multi_"$sp1"-"$sp2" stat_rescue_"$sp1"-"$sp2" statpairs > orth_"$sp1"-"$sp2".tsv
 
 # bank mode: the reference row used for every cluster (labels: locus=BED label of the copy at each junction)
 if [[ "$BANK" == 1 ]]; then
