@@ -435,11 +435,13 @@ def probe_score(probe, target):
     return ident, lo + end - len(probe) // 2
 
 
-def window_locus(chrom, x, strand, slop, flank=300):
-    """the pipeline's window string for an element whose 5' junction is at x (registry anchor = x)"""
+def window_locus(chrom, x, strand, slop, flank=300, length=None):
+    """the pipeline's window string for an element whose 5' junction is at x (registry anchor = x); with the
+    sequence length, the end is clamped to it as bedtools slop -g clamps the pipeline's windows"""
+    top = (lambda v: v) if length is None else (lambda v: min(length, v))
     if strand == '+':
-        return f'{chrom}:{max(0, x - flank)}-{x + slop}(+)'
-    return f'{chrom}:{max(0, x - slop)}-{x + flank}(-)'
+        return f'{chrom}:{max(0, x - flank)}-{top(x + slop)}(+)'
+    return f'{chrom}:{max(0, x - slop)}-{top(x + flank)}(-)'
 
 
 def cmd_orth(args):
@@ -531,8 +533,8 @@ def cmd_orth(args):
                 xb = to_b(pos); bstrand = e['strand'] if bstr == '+' else ('-' if e['strand'] == '+' else '+')
                 status = 'SINE' if outcome == 'present' else 'PM'
                 name = f"N{k}_{e['element']}R"
-                rows.append([f'{name}.nested.{status}', name, status, sa, window_locus(c, xa, e['strand'], slop, args.flank),
-                             '1', sb, window_locus(bc, xb, bstrand, slop, args.flank), '1' if outcome == 'present' else '0']
+                rows.append([f'{name}.nested.{status}', name, status, sa, window_locus(c, xa, e['strand'], slop, args.flank, ga.length(c)),
+                             '1', sb, window_locus(bc, xb, bstrand, slop, args.flank, gb.length(bc)), '1' if outcome == 'present' else '0']
                             + [''] * (len(ORTH_COLS) - 14) + [xa, xb, e['element'], '', 'nested'])
     with open(args.output, 'w') as fh:
         fh.write('\t'.join(ORTH_COLS) + '\n')
