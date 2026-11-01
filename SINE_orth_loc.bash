@@ -605,15 +605,31 @@ run_batch() {
     cd "$WD" && rm -rf "$B" && rm "$part"
 }
 
+# align a cluster file whose last record is the reference row (consensus): the genomic windows are aligned alone
+# with mafft --op 5, then the reference is added with default penalties (--addfragments). Aligning everything at
+# once with --op 5 let a degraded copy (~60 % identity) lose its consensus to unrelated columns, and ComPair.sh
+# reads the SINE columns from the reference row. Output: aligned FASTA on stdout, same rows and order as the input
+# (genomic rows, then the reference last), as the single mafft call gave.
+align_ref() {
+    local f=$1 n
+    n=$(grep -c '^>' "$f")
+    if [ "$n" -lt 3 ]; then mafft --op 5 --quiet "$f"; return; fi
+    awk -v n="$n" -v g="$f.gw" -v r="$f.rf" '/^>/ {k++} {if (k < n) print > g; else {if (!/^>/) gsub(/-/, ""); print > r}}' "$f"
+    mafft --op 5 --quiet "$f.gw" > "$f.gw.aln"
+    mafft --quiet --addfragments "$f.rf" "$f.gw.aln"
+    rm -f "$f.gw" "$f.rf" "$f.gw.aln"
+}
+export -f align_ref
+
 align_doubles() {
     find . -type f -name "*.cl" -print0 |
-     xargs -0 -t -I % -P $THREADS sh -c "mafft --op 5 --quiet '%' |
+     xargs -0 -t -I % -P $THREADS bash -c "align_ref '%' |
      seqkit seq -w 0 > '%.dbl'; COMPAIR_STAT='%.dbl.stat' ComPair.sh '%.dbl'; rm -f '%' '%.dbl'"
 }
 
 align_multies() {
     find . -type f -name "*.cl" -print0 |
-     xargs -0 -t -I % -P $THREADS sh -c "mafft --op 5 --quiet '%' |
+     xargs -0 -t -I % -P $THREADS bash -c "align_ref '%' |
      seqkit seq -w 0 > '%.mul'; rm '%'"
 
     echo finding best pair of sequences in each cluster
@@ -628,7 +644,7 @@ align_multies() {
      awk  -v SINEname=$SINEname 'NR==1 {  print \$1,\$2,SINEname,"\n" }' | sed 's/\s\+/\n/g' >  '{}.list'
      seqkit grep -f '{}.list' '{}' > '{}.doub'; rm '{}.list'" \;
 
-    find . -type f -name "*.doub" -print0 | xargs -0 -t -I % -P $THREADS sh -c "mafft --op 5 --quiet '%' | seqkit seq -w 0 > '%.doubles'; COMPAIR_STAT='%.doubles.stat' ComPair.sh '%.doubles'; awk '\$2!=\"PM\" && \$2!=\"MP\" && \$2!=\"SINE\"' '%.doubles.stat' > '%.doubles.rej.stat'; rm '%' '%.doubles.stat'"
+    find . -type f -name "*.doub" -print0 | xargs -0 -t -I % -P $THREADS bash -c "align_ref '%' | seqkit seq -w 0 > '%.doubles'; COMPAIR_STAT='%.doubles.stat' ComPair.sh '%.doubles'; awk '\$2!=\"PM\" && \$2!=\"MP\" && \$2!=\"SINE\"' '%.doubles.stat' > '%.doubles.rej.stat'; rm '%' '%.doubles.stat'"
 
     # pairs rejected by ComPair.sh: the alignment stays (rejected bundle) and so does its stat line (above; the
     # stat lines of passed pairs are dropped, they are checked again after the right-flank selection below)
@@ -659,7 +675,7 @@ align_multies() {
     for k in *.selected; do [ -f "$k" ] || continue; Count=$(grep -c ">" $k); if [[ $Count -ne "3" ]]; then rm $k; fi; done
 
     find . -type f -name "*.selected" -print0 |
-     xargs -0 -t -I % -P $THREADS sh -c "mafft --op 5 --quiet '%' |
+     xargs -0 -t -I % -P $THREADS bash -c "align_ref '%' |
      seqkit seq -w 0 > '%.sel.aligned'; COMPAIR_STAT='%.sel.aligned.stat' ComPair.sh '%.sel.aligned'; rm '%'"
 
     for i in *.mul.*.MP *.mul.*.PM *.mul.*.SINE; do [ -f "$i" ] || continue; Len=$(awk '{if (NR==2) print length}' $i);
