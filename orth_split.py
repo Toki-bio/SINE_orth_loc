@@ -7,8 +7,9 @@ Usage: orth_split.py orth_<sp1>-<sp2>.tsv [--bundles aln_<sp1>-<sp2>_SINE.aln.gz
 Writes DIR/<reference>/aln_<sp1>-<sp2>_<status>.aln.gz (status = SINE, PM, MP) and DIR/index.tsv (reference, dir,
 status, alignments). References with fewer than --min-loci rows go together under 'other' (same cut as orth_summary's
 table on the Tal page); reference names are made directory-safe. Default bundles: the three next to the orth table;
-default DIR: by_reference next to it. Alignments whose name is not in the orth table (none expected) are counted
-and reported, not written."""
+default DIR: by_reference next to it. Alignments of rows that sine_nest.py supersede moved to
+orth_<sp1>-<sp2>.superseded.tsv (compound loci, NEST=1) are not written and are counted as superseded; any other
+alignment whose name is not in the orth table (none expected) is counted and reported, not written."""
 import argparse
 import collections
 import csv
@@ -34,6 +35,10 @@ def main():
         if r['status'] in ('SINE', 'PM', 'MP') and r['alignment']:
             ref_of[r['alignment']] = r.get('reference') or '(no reference)'
             n_ref[ref_of[r['alignment']]] += 1
+    sup_path = os.path.join(d, f'orth_{pair}.superseded.tsv')
+    superseded = set()
+    if os.path.exists(sup_path):
+        superseded = {r['alignment'] for r in csv.DictReader(open(sup_path), delimiter='	') if r.get('alignment')}
     dirs = {ref: re.sub(r'[^A-Za-z0-9._-]+', '_', ref) if n >= a.min_loci else 'other' for ref, n in n_ref.items()}
     os.makedirs(out, exist_ok=True)
     # bundles of this pair left by an earlier run (a reference that has gone, or moved to/from 'other') go first,
@@ -48,7 +53,7 @@ def main():
             if not os.listdir(p):
                 os.rmdir(p)
 
-    handles, counts, unlisted = {}, collections.Counter(), collections.Counter()
+    handles, counts, unlisted, n_sup = {}, collections.Counter(), collections.Counter(), collections.Counter()
     for b in bundles:
         name, lines = None, []
 
@@ -58,7 +63,7 @@ def main():
             status = name.rsplit('.', 1)[-1]
             ref = ref_of.get(name)
             if ref is None:
-                unlisted[status] += 1
+                (n_sup if name in superseded else unlisted)[status] += 1
                 return
             key = (dirs[ref], status)   # one handle per output file: a single gzip member (browsers reject several)
             if key not in handles:
@@ -82,6 +87,7 @@ def main():
         for (ref, status), n in sorted(counts.items(), key=lambda kv: (-n_ref[kv[0][0]], kv[0])):
             fh.write(f'{ref}\t{dirs[ref]}\t{status}\t{n}\n')
     print(f'{sum(counts.values())} alignments, {len(set(k[0] for k in handles))} directories -> {out}'
+          + (f'; superseded ({os.path.basename(sup_path)}): {dict(n_sup)}' if n_sup else '')
           + (f'; not in the orth table: {dict(unlisted)}' if unlisted else ''))
 
 
