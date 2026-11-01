@@ -107,6 +107,15 @@ def alignment_headers(sources):
     return heads
 
 
+def stat_anchor(locus, ls):
+    """Insertion junction from a stat line's LS1/LS2 (residues left of the SINE in the window), as
+    SINE_orth_loc.bash writes anchor1/anchor2: window start + LS on '+', window end - LS on '-'; '' without LS."""
+    if not ls.isdigit():
+        return ''
+    _, start, end, strand = parse_locus(locus)
+    return str(start + int(ls) if strand == '+' else end - int(ls))
+
+
 def cmd_orth(args):
     species = []
     chrom_species = {}
@@ -148,7 +157,8 @@ def cmd_orth(args):
                 rows.append([aln, aln.split('.')[0], st,
                              species_of(hs[0]), hs[0], '1' if st in ('PM', 'SINE') else '0',
                              species_of(hs[1]), hs[1], '1' if st in ('MP', 'SINE') else '0']
-                            + [metrics.get(k, '') for k in METRICS])
+                            + [metrics.get(k, '') for k in METRICS]
+                            + [stat_anchor(hs[0], metrics.get('LS1', '')), stat_anchor(hs[1], metrics.get('LS2', ''))])
     with open(args.output, 'w') as out:
         out.write('\t'.join(ORTH_COLUMNS) + '\n')
         for r in rows:
