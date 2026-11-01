@@ -180,7 +180,7 @@ map_flanks() {  # $1: genome, $2: flank FASTA, $3: output prefix (writes $3.sam 
 # (-N 50; -p 0.5 of the sr preset, the counterpart of bwa's -D 0.5); same flags as rescue_multi.py mapper_command()
 map_all() {  # $1: genome, $2: FASTA, $3: output SAM
     if [[ "$MAPPER" == minimap2 ]]; then minimap2 -a -N 50 -t $THREADS $MM2_OPTS --secondary=yes "$1.mmi" "$2" > "$3"
-    else bwa mem -a -t $THREADS "$1" "$2" > "$3"; fi
+    else bwa mem -a -t $THREADS "$1" "$2" > "$3"; fi || { echo "mapping $2 on $1 ($MAPPER) failed" >&2; rm -f "$3"; exit 1; }
 }
 
 if [[ "$STAGE" == all || "$STAGE" == prep ]]; then
