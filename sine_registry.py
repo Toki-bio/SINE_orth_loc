@@ -446,11 +446,17 @@ def cmd_build(args):
     # insertions (their groups become X); nested inserts and close/dimer copies keep their state
     caution = collections.defaultdict(list)          # (species, chrom) -> [(start, end, role)]
     for spec in args.caution or []:
+        if '=' not in spec:
+            die(f'--caution {spec}: expected SPECIES=BED')
         sp, path = spec.split('=', 1)
         with open_text(path) as fh:
-            for line in fh:
+            for ln, line in enumerate(fh, 1):
+                if line.startswith(('#', 'track', 'browser')):
+                    continue
                 f = line.rstrip('\n').split('\t')
                 if len(f) >= 5:
+                    if not (f[1].isdigit() and f[2].isdigit()):
+                        die(f'{path} line {ln}: start/end are not numbers')
                     caution[(sp, f[0])].append((int(f[1]), int(f[2]), f[4]))
     def caution_role(sp, c):
         for s0, e0, role in caution.get((sp, c['chrom']), ()):
