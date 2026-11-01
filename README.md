@@ -61,7 +61,8 @@ Bank mode starts when the consensus file has more than one sequence. It changes 
 - **Copies.** `sinederella_bed.py` keeps copies with verdict `SINE` (assigned to a subfamily, flanks
   unique) and partial copies (`family_view/partial_copies.tsv`, status `partial`; label
   `<consensus>:<a>-<b>`, the span they cover). Grey and other not-SINE copies are left out.
-  Overlapping copies become one locus.
+  Overlapping copies on one strand become one locus (labelled with the longest copy); copies
+  overlapping on opposite strands stay separate loci (nested cases: `sine_nest.py`, below).
 - **Reference row.** Every alignment gets the consensus of its own copy (or the covered span of a
   partial copy) as reference row, named `>BANK <subfamily>` (or `>BANK <subfamily>:<a>-<b>` for a
   span), so the subfamily is on the row in every alignment and viewer. A copy at least 10 % longer
