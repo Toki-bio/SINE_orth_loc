@@ -38,7 +38,7 @@ def main():
     sup_path = os.path.join(d, f'orth_{pair}.superseded.tsv')
     superseded = set()
     if os.path.exists(sup_path):
-        superseded = {r['alignment'] for r in csv.DictReader(open(sup_path), delimiter='	') if r.get('alignment')}
+        superseded = {r['alignment'] for r in csv.DictReader(open(sup_path), delimiter='\t') if r.get('alignment')}
     dirs = {ref: re.sub(r'[^A-Za-z0-9._-]+', '_', ref) if n >= a.min_loci else 'other' for ref, n in n_ref.items()}
     os.makedirs(out, exist_ok=True)
     # bundles of this pair left by an earlier run (a reference that has gone, or moved to/from 'other') go first,
