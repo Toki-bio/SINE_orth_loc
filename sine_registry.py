@@ -89,7 +89,7 @@ def alignment_headers(sources):
     for src in sources:
         if os.path.isdir(src):
             for path in glob.glob(os.path.join(src, '*')):
-                if re.search(r'\.(PM|MP|SINE)$', path):
+                if re.search(r'\.(PM|MP|SINE|contig_end)$', path):
                     with open(path) as fh:
                         heads[os.path.basename(path)] = first_two(fh)
         else:
@@ -144,7 +144,7 @@ def cmd_orth(args):
         with open(stat) as fh:
             for line in fh:
                 f = line.split()
-                if len(f) < 2 or f[1] not in ('PM', 'MP', 'SINE'):
+                if len(f) < 2 or f[1] not in ('PM', 'MP', 'SINE', 'contig_end'):
                     continue
                 bank = f[0][2:] if f[0].startswith('./') else f[0]
                 aln = f'{bank}.{f[1]}'
@@ -154,9 +154,11 @@ def cmd_orth(args):
                     continue
                 metrics = dict(kv.split('=', 1) for kv in f[2:] if '=' in kv)
                 st = f[1]
-                rows.append([aln, aln.split('.')[0], st,
-                             species_of(hs[0]), hs[0], '1' if st in ('PM', 'SINE') else '0',
-                             species_of(hs[1]), hs[1], '1' if st in ('MP', 'SINE') else '0']
+                if st == 'contig_end':   # as SINE_orth_loc.bash: MISSING, M on the locus clipped by a sequence end
+                    st, s1, s2 = 'MISSING', 'M' if metrics.get('EDGE') == '0' else '?', 'M' if metrics.get('EDGE') == '1' else '?'
+                else:
+                    s1, s2 = '1' if st in ('PM', 'SINE') else '0', '1' if st in ('MP', 'SINE') else '0'
+                rows.append([aln, aln.split('.')[0], st, species_of(hs[0]), hs[0], s1, species_of(hs[1]), hs[1], s2]
                             + [metrics.get(k, '') for k in METRICS]
                             + [stat_anchor(hs[0], metrics.get('LS1', '')), stat_anchor(hs[1], metrics.get('LS2', ''))])
     with open(args.output, 'w') as out:
@@ -838,7 +840,7 @@ def main():
 
     o = sub.add_parser('orth', help='rebuild an orth table from stat files and alignments of an older run')
     o.add_argument('--stat', nargs='+', required=True, help='stat_doubles_<a>-<b> and stat_multi_<a>-<b>')
-    o.add_argument('--aln', nargs='+', required=True, help='directories with .PM/.MP/.SINE files, or aln_*.aln[.gz] bundles')
+    o.add_argument('--aln', nargs='+', required=True, help='directories with .PM/.MP/.SINE/.contig_end files, or aln_*.aln[.gz] bundles (the rejected bundle holds contig_end)')
     o.add_argument('--species', nargs=2, required=True, metavar='NAME[=FAI]',
                    help='the two species; with =genome.fai chromosomes are assigned by the index, '
                         'otherwise by chromosome name prefix')
