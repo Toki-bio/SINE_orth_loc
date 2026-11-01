@@ -599,9 +599,11 @@ align_multies() {
      awk  -v SINEname=$SINEname 'NR==1 {  print \$1,\$2,SINEname,"\n" }' | sed 's/\s\+/\n/g' >  '{}.list'
      seqkit grep -f '{}.list' '{}' > '{}.doub'; rm '{}.list'" \;
 
-    find . -type f -name "*.doub" -print0 | xargs -0 -t -I % -P $THREADS sh -c "mafft --op 5 --quiet '%' | seqkit seq -w 0 > '%.doubles'; COMPAIR_STAT='%.doubles.stat' ComPair.sh '%.doubles'; rm '%' '%.doubles.stat'"
+    find . -type f -name "*.doub" -print0 | xargs -0 -t -I % -P $THREADS sh -c "mafft --op 5 --quiet '%' | seqkit seq -w 0 > '%.doubles'; COMPAIR_STAT='%.doubles.stat' ComPair.sh '%.doubles'; awk '\$2!=\"PM\" && \$2!=\"MP\" && \$2!=\"SINE\"' '%.doubles.stat' > '%.doubles.rej.stat'; rm '%' '%.doubles.stat'"
 
-    for i in *.mul.*bad*F *.mul.*shortRF *.mul.*.lfSINE *.mul.*.rfSINE; do [ -f "$i" ] || continue; rm $i "${i//.doub.doubles*/}" ; done
+    # pairs rejected by ComPair.sh: the alignment stays (rejected bundle) and so does its stat line (above; the
+    # stat lines of passed pairs are dropped, they are checked again after the right-flank selection below)
+    for i in *.mul.*bad*F *.mul.*shortRF *.mul.*.lfSINE *.mul.*.rfSINE; do [ -f "$i" ] || continue; rm "${i//.doub.doubles*/}" ; done
 
     echo "finding all good sequences in each cluster by similarity in right flanks"
 
