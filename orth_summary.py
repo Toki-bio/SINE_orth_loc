@@ -5,7 +5,8 @@ summary_<sp1>-<sp2>.tsv next to the orth table.
 Usage: orth_summary.py orth_<sp1>-<sp2>.tsv --copies SP1=BED SP2=BED [-o OUT]
 
 Per reference and in total: input copies per species (BED labels), loci = rows of the orth table (C flank-mapped,
-M rescued, N nested), status counts (SINE = in both, PM = in sp1 only, MP = in sp2 only), shared % = SINE / loci,
+M rescued, N nested), status counts (SINE = in both, PM = in sp1 only, MP = in sp2 only; by the species columns of
+the row, as seq1 of an alignment can be either genome), shared % = SINE / loci,
 identity of the copies to the reference (median and 10-90 % range over every copy-bearing locus; divergence =
 100 - identity), identity between the two copies of SINE loci, identity of the left flanks (orthology evidence).
 Identities are ComPair.sh's: OneSINE/TwoSINE (locus vs reference), OneTwo (locus vs locus), FL (left flanks);
@@ -49,7 +50,13 @@ def main():
         rows[r.get('reference') or '(no reference)'].append(r)
 
     def summ(ref, rs):
-        st = collections.Counter(r['status'] for r in rs)
+        # PM/MP by the genome that carries the copy: species1 (seq1) may be either genome of the pair
+        st = collections.Counter()
+        for r in rs:
+            s = r['status']
+            if s in ('PM', 'MP') and r.get('species1') in sps and r.get('species2') in sps:
+                s = 'PM' if r['species1' if s == 'PM' else 'species2'] == sps[0] else 'MP'
+            st[s] += 1
         ty = collections.Counter(r['cluster'][0] for r in rs)
         to_ref, pair, flank = [], [], []
         for r in rs:
