@@ -459,6 +459,13 @@ def cmd_account(args):
     stats = {}
     for path in args.stat:
         stats.update(read_stat(path))
+    # multi clusters: verdict of the last ComPair.sh check of the kept pair (<cl>.cl.mul.doub.doubles, then the
+    # right-flank re-check <cl>.cl.mul.doub.doubles.<st>.selected.sel.aligned: the longer name is the later one)
+    multi_stat = {}
+    for bank, st in stats.items():
+        cl, sep, rest = bank.partition('.cl.mul.')
+        if sep and (cl not in multi_stat or len(bank) > multi_stat[cl][0]):
+            multi_stat[cl] = (len(bank), st)
     final = collections.defaultdict(list)       # cluster -> statuses of final alignments
     if os.path.exists(args.statpairs):
         with open(args.statpairs) as fh:
@@ -488,7 +495,9 @@ def cmd_account(args):
                     st = stats.get(f'{cl}.cl.dbl')
                     fate = f'rejected:{st}' if st else 'rejected'
                 elif cls == 'multi':
-                    fate = 'multi_unresolved'
+                    st = multi_stat.get(cl, (0, ''))[1]
+                    # a PM/MP/SINE verdict without a final alignment: set aside as .overlong (>= 1600 columns)
+                    fate = (f'rejected:overlong_{st}' if st in ('PM', 'MP', 'SINE') else f'rejected:{st}') if st                         else 'multi_unresolved'
                 else:
                     fate = 'poly_unanalysed'
                 rs = collections.Counter(rescue.get(cl, []))
