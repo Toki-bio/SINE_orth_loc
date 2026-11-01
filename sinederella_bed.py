@@ -18,6 +18,12 @@ NAME = re.compile(r'^(.*):(\d+)-(\d+)\(([+-])\)$')
 
 def opener(path):
     if os.path.exists(path):
+        # a plain file next to a .gz of other content: one of them is from an earlier run
+        if os.path.exists(path + '.gz'):
+            with open(path, 'rb') as p, gzip.open(path + '.gz', 'rb') as z:
+                if p.read() != z.read():
+                    sys.exit(f'sinederella_bed.py: {path} and {path}.gz differ (one is from an earlier run?): '
+                             f'remove or rename the stale one')
         return open(path, encoding='utf-8')
     if os.path.exists(path + '.gz'):
         return gzip.open(path + '.gz', 'rt', encoding='utf-8')
