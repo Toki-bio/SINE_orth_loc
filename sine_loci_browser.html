@@ -685,7 +685,7 @@ function compair(seqs, T = COMPAIR_DEFAULTS) {
 // ── end ComPair port ─────────────────────────────────────────────────────────
 
 const ACCEPTED = ['PM', 'MP', 'SINE'];
-const REJECTED = ['badLF', 'badRF', 'shortRF', 'lfSINE', 'rfSINE', 'tiePM'];
+const REJECTED = ['badLF', 'badRF', 'shortRF', 'lfSINE', 'rfSINE', 'tiePM', 'overlong'];  // overlong = multi alignments >=1600 columns kept as .overlong
 const STATUS_TYPES = ACCEPTED.concat(REJECTED);
 const groupOf = t => ACCEPTED.includes(t) ? t : 'REJ';
 const liveOf = f => f.live || f.type;              // status under the current thresholds
