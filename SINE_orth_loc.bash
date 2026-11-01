@@ -439,6 +439,8 @@ bedtools getfasta -s -name -fi $sp1-"$sp2".bnk -bed $sp1"$sp2"_m.bed |
 
 echo "separating"
 
+# doubles, multies and polies: files of an earlier run in this directory are replaced, not appended to
+rm -f $sp1-"$sp2"_double $sp1-"$sp2"_multi $sp1-"$sp2"_poly
 cat $sp1-"$sp2"_oneline | awk -v sp1=$sp1 -v sp2=$sp2 -F">" '{if (NF<=3) print $0 >> sp1"-"sp2"_double"; else if (NF<11) print $0 >> sp1"-"sp2"_multi"; else print $0 >> sp1"-"sp2"_poly"}'
 
 echo "stage2 completed"
@@ -606,7 +608,7 @@ run_batch() {
 align_doubles() {
     find . -type f -name "*.cl" -print0 |
      xargs -0 -t -I % -P $THREADS sh -c "mafft --op 5 --quiet '%' |
-     seqkit seq -w 0 > '%.dbl'; COMPAIR_STAT='%.dbl.stat' ComPair.sh '%.dbl'; rm '%' '%.dbl'"
+     seqkit seq -w 0 > '%.dbl'; COMPAIR_STAT='%.dbl.stat' ComPair.sh '%.dbl'; rm -f '%' '%.dbl'"
 }
 
 align_multies() {
