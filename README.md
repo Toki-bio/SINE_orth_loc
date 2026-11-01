@@ -117,8 +117,10 @@ consensus alone (`D.fa`, `aaa-D.bed`, `bbb-D.bed`): 70/330.
 - `MAPPER` (minimap2) / `MM2_OPTS` (`-x sr -k 11 -w 3 -p 0.5 -N 50`): the mapper of the flanks
   (`minimap2 -a --secondary=no`), of the rescue and of the nested-locus test (`minimap2 -a --secondary=yes
   -N 50`, the counterpart of `bwa mem -a`). A `.mmi` index is built once per genome in the run directory
-  (`<genome>.mmi`, tagged with `MM2_OPTS` in `<genome>.mmi.opts` and rebuilt when the options change;
-  about 9 GB, ~40 s and 19-27 GB of memory for a 2 Gbp genome). `MAPPER=bwa` uses `bwa mem` instead
+  (`<genome>.mmi`, stamped with `MM2_OPTS` and the genome's cksum in `<genome>.mmi.stamp` and rebuilt when
+  either changes; about 9 GB, ~40 s and 19-27 GB of memory for a 2 Gbp genome). The `.fai`, the bwa index
+  and every flank SAM carry such a `.stamp` too (SAM: mapper, `MM2_OPTS`, `FLANK`, cksums of genome and
+  flank FASTA), so a rerun in the same directory remaps or reindexes whatever its settings or inputs changed. `MAPPER=bwa` uses `bwa mem` instead
   (a `bwa index` is built if missing: 34 min and ~5 GB per 2 Gbp genome); the results are the same within
   0.2 % (table under "minimap2 settings"), so bwa is the choice for small-memory machines.
 - `BOTHFLANKS` (1): maps the right flanks too; a left-flank hit is kept only where the right flank of

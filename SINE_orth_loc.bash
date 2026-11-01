@@ -84,21 +84,33 @@ sp2="${2%.*}"
 
 # prepare genomes - renaming to simple 3-letters FASTA names
 
+# Settings stamps: an index or SAM left by an earlier run is reused only while the stamp written next to it
+# (<file>.stamp: the settings and the input fingerprints it was made with) matches the current ones; otherwise
+# it is made again. The fingerprint of an input is the cksum (CRC and size) of its content, so a copied run
+# directory keeps its indexes, while a genome replaced at the same path or a recut flank file does not.
+declare -A FP
+fp() {  # $1: file; sets FP[$1] to "CRC SIZE" of its content ("absent" if unreadable), once per run
+    [[ -n "${FP[$1]}" ]] || FP[$1]=$( { [ -r "$1" ] && cksum < "$1"; } || echo absent)
+}
+stamp_ok() { [ -s "$1" ] && [[ "$(cat "$1.stamp" 2> /dev/null)" == "$2" ]]; }  # $1: file, $2: settings
+
+# FASTA index of a genome, rebuilt when the genome changed. Without the genome (STAGE=align on a node that has
+# only the .fai files) an existing .fai is used as it is.
+fai_index() {  # $1: genome
+    fp "$1"; local s="genome ${FP[$1]}"
+    if [[ "${FP[$1]}" == absent && -s "$1.fai" ]]; then echo "$1 index found (genome not readable here)"
+    elif stamp_ok "$1.fai" "$s"; then echo "$1 index found"
+    else echo "indexing $1"
+        rm -f "$1.fai" "$1.fai.stamp"
+        samtools faidx "$1" && [ -s "$1.fai" ] || { echo "samtools faidx $1 failed" >&2; rm -f "$1.fai"; exit 1; }
+        echo "$s" > "$1.fai.stamp"
+    fi
+}
+
 # indexing genome files
 echo "Checking FASTA indexes"
-
-FastaIndexsp1=$(echo $1.fai)
-FastaIndexsp2=$(echo $2.fai)
-
-if [ -f "$FastaIndexsp1" ]; then echo $1 index found
-    else echo indexing $1
-    samtools faidx $1
-fi
-
-if [ -f "$FastaIndexsp2" ]; then echo $2 index found
-    else echo indexing $2
-    samtools faidx $2
-fi
+fai_index "$1"
+fai_index "$2"
 
 # SINE search
 
@@ -114,6 +126,62 @@ if [ -f "$SINEs_in_genome2" ]; then echo Bank of $(wc -l $SINEs_in_genome2) SINE
     else echo no SINE bed file found - please provide $SINEs_in_genome2 file or use sear2kloop script
     exit 1
 fi
+
+# minimap2 index of a genome, built once per run directory with the k-mer and window settings of MM2_OPTS (a .mmi
+# fixes k, w and HPC and overrides the command line; about 9 GB and 1-2 min for a 2 Gbp genome at -k 11 -w 3),
+# rebuilt when MM2_OPTS or the genome changed ($1.mmi.stamp); bwa index (MAPPER=bwa) rebuilt when the genome changed
+# ($1.sa.stamp). An index of an older run without a stamp is adopted when it is not older than the genome (and, for
+# the .mmi, its .mmi.opts holds the current MM2_OPTS). A failed build stops the run.
+genome_index() {  # $1: genome
+    fp "$1"
+    if [[ "$MAPPER" == minimap2 ]]; then
+        local s="minimap2 $MM2_OPTS | genome ${FP[$1]}"
+        if [ -s "$1.mmi" ] && [ ! -f "$1.mmi.stamp" ] && [ ! "$1" -nt "$1.mmi" ] &&
+           [[ "$(cat "$1.mmi.opts" 2> /dev/null)" == "$MM2_OPTS" ]]; then echo "$s" > "$1.mmi.stamp"; fi
+        if stamp_ok "$1.mmi" "$s"; then echo "$1.mmi found"; return; fi
+        echo "indexing $1 (minimap2 $MM2_OPTS)"
+        rm -f "$1.mmi" "$1.mmi.stamp" "$1.mmi.opts"
+        minimap2 $MM2_OPTS -t $THREADS -d "$1.mmi" "$1" && [ -s "$1.mmi" ] ||
+            { echo "minimap2 index of $1 failed (memory? README: minimap2 settings)" >&2; rm -f "$1.mmi"; exit 1; }
+        echo "$s" > "$1.mmi.stamp"; echo "$MM2_OPTS" > "$1.mmi.opts"
+    else
+        local s="bwa | genome ${FP[$1]}"
+        if [ -s "$1.sa" ] && [ ! -f "$1.sa.stamp" ] && [ ! "$1" -nt "$1.sa" ]; then echo "$s" > "$1.sa.stamp"; fi
+        if stamp_ok "$1.sa" "$s"; then echo "$1 bwa index found"; return; fi
+        echo "indexing $1 (bwa)"
+        rm -f "$1.sa" "$1.sa.stamp"
+        bwa index "$1" && [ -s "$1.sa" ] || { echo "bwa index of $1 failed" >&2; rm -f "$1.sa"; exit 1; }
+        echo "$s" > "$1.sa.stamp"
+    fi
+}
+
+# mapping flank sequences, one placement per flank (minimap2, or bwa mem with MAPPER=bwa); hits to BED:
+# target, start, end, flank name, MAPQ/LENGTH/AS, strand (SAM records with fewer than 100 bases of SEQ are left out).
+# $3.sam is reused only while $3.sam.stamp (mapper, MM2_OPTS, FLANK, fingerprints of genome and flank FASTA) matches.
+map_flanks() {  # $1: genome, $2: flank FASTA, $3: output prefix (writes $3.sam and $3.bed)
+    fp "$1"; FP[$2]=""; fp "$2"
+    local s="$MAPPER"; [[ "$MAPPER" == minimap2 ]] && s="$s $MM2_OPTS"
+    s="$s | FLANK $FLANK | genome ${FP[$1]} | flanks ${FP[$2]}"
+    if stamp_ok "$3.sam" "$s"; then echo "$3.sam found"; else
+        echo "mapping $2 on $1 ($MAPPER)"
+        rm -f "$3.sam.stamp"
+        if [[ "$MAPPER" == minimap2 ]]; then minimap2 -a --secondary=no -t $THREADS $MM2_OPTS "$1.mmi" "$2" > "$3.sam"
+        else bwa mem -t $THREADS "$1" "$2" > "$3.sam"; fi ||
+            { echo "mapping $2 on $1 ($MAPPER) failed" >&2; rm -f "$3.sam"; exit 1; }
+        echo "$s" > "$3.sam.stamp"
+    fi
+    sam2bed < "$3.sam" | awk 'BEGIN {OFS="\t"} length($12) > 99 {as="AS:i:NA"
+     for (i=14; i<=NF; i++) if ($i ~ /^AS:i:/) {as=$i; break}
+     sub(/:i:/, "=", as); print $1, $2, $3, $4, "MAPQ="$5",LENGTH="length($12)","as, $6}' | bedtools sort -i > "$3.bed"
+}
+
+# all placements of each flank (multi-copy clusters, compound loci): bwa mem -a, or minimap2 with its secondary
+# hits printed (the sr preset hides them), up to 50 per primary with a chain score >= 0.5 x the primary's
+# (-N 50; -p 0.5 of the sr preset, the counterpart of bwa's -D 0.5); same flags as rescue_multi.py mapper_command()
+map_all() {  # $1: genome, $2: FASTA, $3: output SAM
+    if [[ "$MAPPER" == minimap2 ]]; then minimap2 -a -N 50 -t $THREADS $MM2_OPTS --secondary=yes "$1.mmi" "$2" > "$3"
+    else bwa mem -a -t $THREADS "$1" "$2" > "$3"; fi
+}
 
 if [[ "$STAGE" == all || "$STAGE" == prep ]]; then
 # preparing left flanks
@@ -140,37 +208,6 @@ for sp in $sp1 $sp2; do
         bedtools getfasta -s -name -bed "$sp"_rflanks_$FLANK.bed -fi $g | sed '/^>/s/::.*//' > "$sp"_rflanks_$FLANK.bnk
     fi
 done
-
-# minimap2 index of a genome, built once per run directory with the k-mer and window settings of MM2_OPTS (a .mmi
-# fixes k, w and HPC and overrides the command line; about 9 GB and 1-2 min for a 2 Gbp genome at -k 11 -w 3),
-# rebuilt when MM2_OPTS changed
-mm2_index() {  # $1: genome; writes $1.mmi and $1.mmi.opts
-    if [ -f "$1.mmi" ] && [ "$(cat "$1.mmi.opts" 2> /dev/null)" == "$MM2_OPTS" ]; then echo "$1.mmi found"; else
-        echo "indexing $1 (minimap2 $MM2_OPTS)"
-        minimap2 $MM2_OPTS -t $THREADS -d "$1.mmi" "$1" && echo "$MM2_OPTS" > "$1.mmi.opts"
-    fi
-}
-
-# mapping flank sequences, one placement per flank (minimap2, or bwa mem with MAPPER=bwa); hits to BED:
-# target, start, end, flank name, MAPQ/LENGTH/AS, strand (SAM records with fewer than 100 bases of SEQ are left out)
-map_flanks() {  # $1: genome, $2: flank FASTA, $3: output prefix (writes $3.sam and $3.bed)
-    if [ -f "$3.sam" ]; then echo "$3.sam found"; else
-        echo "mapping $2 on $1 ($MAPPER)"
-        if [[ "$MAPPER" == minimap2 ]]; then minimap2 -a --secondary=no -t $THREADS $MM2_OPTS "$1.mmi" "$2" > "$3.sam"
-        else bwa mem -t $THREADS "$1" "$2" > "$3.sam"; fi
-    fi
-    sam2bed < "$3.sam" | awk 'BEGIN {OFS="\t"} length($12) > 99 {as="AS:i:NA"
-     for (i=14; i<=NF; i++) if ($i ~ /^AS:i:/) {as=$i; break}
-     sub(/:i:/, "=", as); print $1, $2, $3, $4, "MAPQ="$5",LENGTH="length($12)","as, $6}' | bedtools sort -i > "$3.bed"
-}
-
-# all placements of each flank (multi-copy clusters, compound loci): bwa mem -a, or minimap2 with its secondary
-# hits printed (the sr preset hides them), up to 50 per primary with a chain score >= 0.5 x the primary's
-# (-N 50; -p 0.5 of the sr preset, the counterpart of bwa's -D 0.5); same flags as rescue_multi.py mapper_command()
-map_all() {  # $1: genome, $2: FASTA, $3: output SAM
-    if [[ "$MAPPER" == minimap2 ]]; then minimap2 -a -N 50 -t $THREADS $MM2_OPTS --secondary=yes "$1.mmi" "$2" > "$3"
-    else bwa mem -a -t $THREADS "$1" "$2" > "$3"; fi
-}
 
 # BOTHFLANKS=1: keep a left-flank hit only where the right flank of the same copy has a hit on the same target
 # sequence and strand, -30 to SINElength + 100 bp downstream of the left-flank hit (in the flank orientation).
@@ -252,10 +289,7 @@ adapt_flanks() {  # $1: hits BED (updated in place), $2: flank FASTA, $3: source
     done
 }
 
-for g in $1 $2; do
-    if [[ "$MAPPER" == minimap2 ]]; then mm2_index $g
-    elif [ -f "$g.sa" ]; then echo $g bwa index found; else echo indexing $g; bwa index $g; fi
-done
+for g in $1 $2; do genome_index $g; done
 sfx=""; [[ "$MAPPER" == minimap2 ]] && sfx=".mm2"
 map_flanks $1 "$sp2"_flanks_$FLANK.bnk "$sp2"_flanks-$sp1$sfx
 map_flanks $2 "$sp1"_flanks_$FLANK.bnk "$sp1"_flanks-$sp2$sfx
