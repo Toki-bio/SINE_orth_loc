@@ -111,6 +111,13 @@ fai_index() {  # $1: genome
 echo "Checking FASTA indexes"
 fai_index "$1"
 fai_index "$2"
+# Sequences are told apart by name alone (merged bank $sp1-$sp2.bnk, $sp1-$sp2.sizes for the contig-end test, the
+# species of an alignment row): a name present in both genomes would take the other genome's sequence and length
+shared=$(LC_ALL=C comm -12 <(cut -f1 "$1.fai" | LC_ALL=C sort -u) <(cut -f1 "$2.fai" | LC_ALL=C sort -u) | head -n 3)
+if [[ -n "$shared" ]]; then
+    echo "$1 and $2 share sequence names (e.g. $(echo $shared)): rename the sequences of one genome (e.g. prefix them)" >&2
+    exit 1
+fi
 
 # SINE search
 
