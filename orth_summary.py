@@ -19,7 +19,7 @@ import statistics
 
 def q(xs, p):
     xs = sorted(xs)
-    return xs[min(len(xs) - 1, int(p * len(xs)))] if xs else None
+    return xs[round(p * (len(xs) - 1))] if xs else None   # nearest rank on 0..n-1: not the maximum for n <= 10
 
 
 def fmt(xs):
