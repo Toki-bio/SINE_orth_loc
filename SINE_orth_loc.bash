@@ -545,13 +545,15 @@ pick_refs() {
              while ((getline l < CT) > 0) {split(l, x, "\t"); cont[x[1]]=cont[x[1]] " " x[2]}}
       {d=($6=="+") ? $8-($2+F) : ($3-F)-$9; if (d<0) d=-d; if ($6!=$12) d+=1000
        if (d<=F && (!($4 in best) || d<best[$4])) {best[$4]=d; lab[$4]=$10; cl[$4]=$9-$8; off[$4]=($6=="+") ? $8-$2 : $3-$9}}
-      END {for (w in off) {split(w, p, "|"); c=p[1]; sub(/\.cl$/,"",c); print p[2] "\t" off[w] > (c ".off")}
+      END {PROCINFO["sorted_in"]="@ind_str_asc"  # windows in name order, not hash order; ties go to the C-order first label
+           for (w in off) {split(w, p, "|"); c=p[1]; sub(/\.cl$/,"",c); print p[2] "\t" off[w] > (c ".off")}
            for (w in lab) {r=lab[w]; shown=r
             if (cl[w] > 1.1*len[r] && (r in cont)) {n=split(cont[r], y, " "); b=r
-             for (i=1; i<=n; i++) {e1=len[y[i]]-cl[w]; e0=len[b]-cl[w]; if ((e1<0?-e1:e1) < (e0<0?-e0:e0)) b=y[i]}
+             for (i=1; i<=n; i++) {e1=len[y[i]]-cl[w]; e0=len[b]-cl[w]; if (e1<0) e1=-e1; if (e0<0) e0=-e0
+              if (e1 < e0 || (e1 == e0 && b != r && y[i] < b)) b=y[i]}
              if (b != r) {lab[w]=b; shown=r ">" b}}
             split(w, p, "|"); c=p[1]; sub(/\.cl$/,"",c); seen[c]=seen[c] (seen[c]=="" ? "" : ",") p[2]"="shown
-            if (!(c in ref) || len[lab[w]]>len[ref[c]]) ref[c]=lab[w]}
+            if (!(c in ref) || len[lab[w]]>len[ref[c]] || (len[lab[w]]==len[ref[c]] && lab[w]<ref[c])) ref[c]=lab[w]}
            for (c in seen) print c"\t"ref[c]"\t"seen[c]
            print "#fallback\t" fb}' > win.refs
     fb=$(awk -F'\t' '$1=="#fallback" {print $2}' win.refs)
