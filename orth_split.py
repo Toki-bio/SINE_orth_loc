@@ -36,6 +36,17 @@ def main():
             n_ref[ref_of[r['alignment']]] += 1
     dirs = {ref: re.sub(r'[^A-Za-z0-9._-]+', '_', ref) if n >= a.min_loci else 'other' for ref, n in n_ref.items()}
     os.makedirs(out, exist_ok=True)
+    # bundles of this pair left by an earlier run (a reference that has gone, or moved to/from 'other') go first,
+    # so the directory holds exactly what index.tsv lists
+    for sub in os.listdir(out):
+        p = os.path.join(out, sub)
+        if os.path.isdir(p):
+            for s in ('SINE', 'PM', 'MP'):
+                f = os.path.join(p, f'aln_{pair}_{s}.aln.gz')
+                if os.path.exists(f):
+                    os.remove(f)
+            if not os.listdir(p):
+                os.rmdir(p)
 
     handles, counts, unlisted = {}, collections.Counter(), collections.Counter()
     for b in bundles:

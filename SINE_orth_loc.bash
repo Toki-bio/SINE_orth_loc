@@ -471,6 +471,10 @@ fi
 SCRATCH=$(mktemp -d "${SCRATCH_DIR:-${SLURM_TMPDIR:-${TMPDIR:-$WD}}}/SINE_orth_loc_${sp1}-${sp2}.XXXXXX") || exit 1
 trap 'rm -rf "$SCRATCH"' EXIT
 BUNDLE="$WD/aln_${sp1}-${sp2}"
+# STAGE=finish rebuilds the bundles from shard_*/: without shards, stop before the finished bundles are reset
+if [[ "$STAGE" == finish ]] && ! ls -d shard_*/ > /dev/null 2>&1; then
+    echo "STAGE=finish: no shard_*/ directories (aln_${sp1}-${sp2}_*.aln.gz left as they are)"; exit 1
+fi
 for t in PM MP SINE rejected; do rm -f "${BUNDLE}_$t.aln.gz"; echo "##SINE_orth_loc bundle v1" > "${BUNDLE}_$t.aln"; done
 rm -f statcoords statpairs refs_chosen
 
@@ -684,6 +688,7 @@ if [[ "$RESCUE" == 1 ]]; then
     [ -s rescue_"$sp2".fa ] && map_all $1 rescue_"$sp2".fa rescue_"$sp2".sam
     "$PYTHON" "$RESCUE_PY" resolve --prep rescue --sam "$sp1=rescue_$sp1.sam" "$sp2=rescue_$sp2.sam" \
      --genome "$sp1=$1" "$sp2=$2" --sine-length $SINElength --flank $FLANK --out "$sp1-$sp2"_rescue --report rescue_"$sp1-$sp2".tsv
+    rm -f RPART*  # batches left by an interrupted earlier rescue
     awk 'NR%100==1{x="RPART"++i;}{print > x}' "$sp1-$sp2"_rescue
     for i in RPART*; do [ -f "$i" ] || continue
         run_batch "$i" align_doubles
@@ -760,6 +765,17 @@ echo "writing clusters_$sp1-$sp2.tsv"
  --stat stat_doubles_"$sp1"-"$sp2" stat_multi_"$sp1"-"$sp2" stat_rescue_"$sp1"-"$sp2" --statpairs statpairs \
  --rescue-report rescue_"$sp1-$sp2".tsv --out clusters_"$sp1"-"$sp2".tsv
 
+# nest scan of one genome, reused while nest_<sp>.stamp (genome, copies BED, library, FLANK) matches
+nest_scan() {  # $1: species, $2: genome
+    fp "$2"; FP[$1-$SINEname.bed]=""; fp "$1-$SINEname.bed"; fp "$SINEfa"
+    local s="genome ${FP[$2]} | copies ${FP[$1-$SINEname.bed]} | library ${FP[$SINEfa]} | close $FLANK"
+    if [ -s nest_"$1".loci.tsv ] && [[ "$(cat nest_"$1".stamp 2> /dev/null)" == "$s" ]]; then
+        echo "nest_$1.loci.tsv found"; return; fi
+    rm -f nest_"$1".stamp
+    "$PYTHON" "$NEST_PY" scan --genome "$2" --copies "$1-$SINEname".bed \
+        --library "$SINEfa" -o nest_"$1" --close $FLANK --cpu "$THREADS" && echo "$s" > nest_"$1".stamp
+}
+
 # nested (SINE-in-SINE), split, dimeric, close and satellite copies: sine_nest.py scan finds them with
 # nhmmer (incl. fragments below the annotation thresholds); compound loci are then compared through the
 # flanks outside the whole locus, and each element is tested by its junctions (orth rows N<k>R).
@@ -768,8 +784,7 @@ if [[ "$NEST" == 1 ]]; then
     if command -v nhmmer > /dev/null; then
         for sp in "$sp1" "$sp2"; do
             g=$1; [[ "$sp" == "$sp2" ]] && g=$2
-            [[ -s nest_"$sp".loci.tsv ]] || "$PYTHON" "$NEST_PY" scan --genome "$g" --copies "$sp-$SINEname".bed \
-                --library "$SINEfa" -o nest_"$sp" --close $FLANK --cpu "$THREADS"
+            nest_scan "$sp" "$g"
         done
         idx=""; [[ "$MAPPER" == minimap2 ]] && idx=.mmi
         "$PYTHON" "$NEST_PY" orth --a "$sp1=$1" --b "$sp2=$2" --scan nest_"$sp1" -o nested_"$sp1"-in-"$sp2".tsv \
