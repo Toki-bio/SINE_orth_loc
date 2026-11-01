@@ -22,6 +22,8 @@ CP_SINE_FRAC=${CP_SINE_FRAC:-0}     # >0: CP_SINE_NID lowered to this % of the r
 CP_CUT_PID=${CP_CUT_PID:-70}        # SINE in one: min % identity of the trimmed right flank
 CP_CUT_NID=${CP_CUT_NID:-120}       # SINE in one: min identical nt in the trimmed right flank
 CP_INDEL_MIN=${CP_INDEL_MIN:-50}    # right flank: one-sided gap runs >= this are masked before re-testing (0: off)
+CP_SIDE_FRAC=${CP_SIDE_FRAC:-50}    # SINE in one: a locus carries the insertion when its residues in the SINE columns are
+                                     # >= this % of the reference row's residues there; both or neither -> tiePM (rejected)
 # CP_SIZES: chrom<TAB>size of both genomes; rejected loci whose window touches a sequence end -> contig_end
 HELPER="$(dirname "$(readlink -f "$0")")/compair_flank.py"
 PY=${PYTHON:-python3}
@@ -157,13 +159,22 @@ echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp
 	    	    then echo right flank is good, heterozygous copy, next find which plus/minus
 			trim_right=$((RF+cutRF))
 			seqkit subseq -r 1:$trim_right -w 0 $bank > $bank.trim
-			if [[ $SO -gt $ST ]]
+			# which locus carries the insertion: residues (non-gap) of row 1 and row 2 in the SINE columns, not
+			# identity to the reference (SO/ST); both or neither carrying it -> tiePM, rejected (GLM audit #25)
+			read -r R1 R2 RR <<< "$(seqkit subseq -r $LFcut:$RF -w 0 $bank | awk '!/^>/ {n++; s=$0; gsub(/-/,"",s); r[n]=length(s)} END {print r[1]+0, r[2]+0, r[n]+0}')"
+			P1=$(( R1 * 100 >= CP_SIDE_FRAC * RR )); P2=$(( R2 * 100 >= CP_SIDE_FRAC * RR ))
+			echo "residues in the SINE columns: R1=$R1 R2=$R2 reference=$RR"
+			if [[ $P1 -eq 1 && $P2 -eq 0 ]]
 			    then
 				echo plus minus
 				mv $bank.trim $bank.PM; rm $bank; status=$(echo "PM")
-			    else
+			elif [[ $P1 -eq 0 && $P2 -eq 1 ]]
+			    then
 				echo minus plus
 				mv $bank.trim $bank.MP; rm $bank; status=$(echo "MP")
+			    else
+				echo "insertion in both or neither locus: tie"
+				rm $bank.trim; mv $bank $bank.tiePM; status=$(echo "tiePM")
 			fi
 	    	    else echo right flank bad, next try to fix it; mv $bank $bank.badRF; status=$(echo "badRF")
 		fi
@@ -171,7 +182,7 @@ echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp
     else echo left flank bad $LFcp $LF $FL; mv $bank $bank.badLF; status=$(echo "badLF")
 fi
 if [[ "$status" == bad* ]] && at_edge "$bank.$status"; then new=$(edge_status); mv $bank.$status $bank.$new; status=$new; fi
-echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST FI=$FI EDGE=$EDGE LS1=$LS1 LS2=$LS2 >> "$STAT"
+echo $bank $status LF=$LF FL=$FL LFcp=$LFcp RFlength=$RFlength FR=$FR RFcp=$RFcp OneTwo=$OneTwo OneSINE=$OneSINE TwoSINE=$TwoSINE SL=$SL SO=$SO ST=$ST FI=$FI EDGE=$EDGE LS1=$LS1 LS2=$LS2 R1=$R1 R2=$R2 >> "$STAT"
 rm $bank.seqkit.fai $bank.stats
 exit
 

@@ -632,7 +632,7 @@ align_multies() {
 
     # pairs rejected by ComPair.sh: the alignment stays (rejected bundle) and so does its stat line (above; the
     # stat lines of passed pairs are dropped, they are checked again after the right-flank selection below)
-    for i in *.mul.*bad*F *.mul.*shortRF *.mul.*.lfSINE *.mul.*.rfSINE; do [ -f "$i" ] || continue; rm "${i//.doub.doubles*/}" ; done
+    for i in *.mul.*bad*F *.mul.*shortRF *.mul.*.lfSINE *.mul.*.rfSINE *.mul.*.tiePM; do [ -f "$i" ] || continue; rm "${i//.doub.doubles*/}" ; done
 
     echo "finding all good sequences in each cluster by similarity in right flanks"
 

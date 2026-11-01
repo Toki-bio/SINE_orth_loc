@@ -13,7 +13,7 @@ Usage:
   $0 pack    [--remove] DIR PREFIX      bundle loose .PM/.MP/.SINE files of an older run in DIR
                                         into PREFIX_PM.aln.gz, PREFIX_MP.aln.gz, PREFIX_SINE.aln.gz,
                                         and its rejected ones (*.cl.*.badLF, badRF, shortRF, lfSINE,
-                                        rfSINE, contig_end, contig_end_lf, overlong) into PREFIX_rejected.aln.gz
+                                        rfSINE, tiePM, contig_end, contig_end_lf, overlong) into PREFIX_rejected.aln.gz
                                         (--remove deletes the packed files afterwards)
 EOF
     exit 1
@@ -83,7 +83,7 @@ case $cmd in
             echo "##SINE_orth_loc bundle v1" > "$out" || exit 1
             names=(-name "*.$t")
             [[ $t == rejected ]] && names=(-name "*.cl.*.badLF" -o -name "*.cl.*.badRF" -o -name "*.cl.*.shortRF" -o -name "*.cl.*.lfSINE"
-                -o -name "*.cl.*.rfSINE" -o -name "*.cl.*.contig_end" -o -name "*.cl.*.contig_end_lf" -o -name "*.cl.*.overlong")
+                -o -name "*.cl.*.rfSINE" -o -name "*.cl.*.tiePM" -o -name "*.cl.*.contig_end" -o -name "*.cl.*.contig_end_lf" -o -name "*.cl.*.overlong")
             find "$dir" -maxdepth 1 -type f \( "${names[@]}" \) -print0 | sort -z |
              xargs -0 -r awk 'FNR==1 {n=FILENAME; sub(/.*\//,"",n); print "##FILE " n} {print}' >> "$out" || exit 1
             gzip -f "$out" || exit 1

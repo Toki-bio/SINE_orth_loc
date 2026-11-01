@@ -99,6 +99,12 @@ Bank mode starts when the consensus file has more than one sequence. It changes 
   the reference (`CP_SINE_NID`). With `CP_SINE_FRAC` (bank mode default 50) the threshold is lowered
   to that percentage of the reference length when that is smaller, e.g. 52 nt for a 105 bp
   consensus or a 105 bp partial span. Consensi of 200 bp or more keep 100 nt.
+- **Which genome carries the copy (PM or MP).** When the SINE is in one genome only, `ComPair.sh`
+  counts the residues (non-gap) of each locus in the SINE columns of the alignment; a locus carries
+  the insertion when it has at least `CP_SIDE_FRAC` % (default 50) of the reference row's residues
+  there. Locus 1 only -> `PM`, locus 2 only -> `MP`; both or neither -> `tiePM`, rejected (rejected
+  bundle, `clusters_*.tsv` fate `rejected:tiePM`, no orth row). Until 2026-11 the side was taken from
+  identity to the reference (`SO > ST`), so every tie, including SO = ST = 0, became MP (GLM audit #25).
 
 Toy test (`tests/simulate_bank.py`: consensi of 110, 250, 360 = 110 + 250 and 600 bp; full,
 partial and relabelled copies, shared or in one genome; 330 events):
@@ -383,7 +389,7 @@ Clusters are processed in batches of 100 in the scratch directory, and the resul
 alignments are appended to one bundle per category instead of one file per locus:
 
     aln_<sp1>-<sp2>_PM.aln.gz  aln_<sp1>-<sp2>_MP.aln.gz  aln_<sp1>-<sp2>_SINE.aln.gz
-    aln_<sp1>-<sp2>_rejected.aln.gz   (alignments that failed ComPair.sh QC)
+    aln_<sp1>-<sp2>_rejected.aln.gz   (alignments that failed ComPair.sh QC, incl. tiePM)
 
 A bundle is plain text: a `##FILE <name>` line followed by that alignment in FASTA,
 repeated. Names are the same as the former individual files (e.g. `C12R.cl.dbl.PM`).
@@ -396,7 +402,7 @@ repeated. Names are the same as the former individual files (e.g. `C12R.cl.dbl.P
   alignment its metrics and the test that decides it. Load the `rejected` bundle as well to
   see what relaxed thresholds would accept. **Copy as env** gives the setting for the next run:
   `CP_FLANK_LEN=150 CP_FLANK_NID=65 CP_FLANK_PID=65 CP_SINE_PID=65 CP_SINE_NID=100
-  CP_CUT_PID=70 CP_CUT_NID=120 SINE_orth_loc_flexible.sh ...` (these are the defaults).
+  CP_CUT_PID=70 CP_CUT_NID=120 CP_SIDE_FRAC=50 SINE_orth_loc_flexible.sh ...` (these are the defaults).
 - `aln_bundle.sh list|count|get|extract` lists, prints or restores individual files, e.g.
   `aln_bundle.sh extract -p '^C12R\.' out/ aln_sp1-sp2_*.aln.gz`.
 - `aln_bundle.sh pack [--remove] DIR PREFIX` bundles the loose `.PM/.MP/.SINE` files of

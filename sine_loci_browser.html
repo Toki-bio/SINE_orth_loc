@@ -524,7 +524,7 @@
     <span class="filter-chip" data-type="SINE" title="Show .SINE files">SINE</span>
     <span class="filter-chip" data-type="PM"   title="Show .PM files">PM</span>
     <span class="filter-chip" data-type="MP"   title="Show .MP files">MP</span>
-    <span class="filter-chip" data-type="REJ"  title="Show alignments rejected by ComPair.sh (rejected bundle or .badLF/.badRF/.shortRF/.lfSINE/.rfSINE files)">rejected</span>
+    <span class="filter-chip" data-type="REJ"  title="Show alignments rejected by ComPair.sh (rejected bundle or .badLF/.badRF/.shortRF/.lfSINE/.rfSINE/.tiePM files)">rejected</span>
     <select id="refSelect" style="display:none;width:auto;max-width:220px;" title="Subfamily: the reference row of the alignment (bank mode)"></select>
     <label style="font-size:11px;white-space:nowrap;" title="Only alignments whose class changes under the current thresholds"><input type="checkbox" id="changedOnly"> changed</label>
   </div>
@@ -616,7 +616,7 @@
 // Identity as esl-alipid: identical residues / residues of the shorter sequence, printed
 // with 2 decimals and truncated to an integer (ComPair reads the integer part).
 const COMPAIR_DEFAULTS = { CP_FLANK_LEN: 150, CP_FLANK_NID: 65, CP_FLANK_PID: 65,
-  CP_SINE_PID: 65, CP_SINE_NID: 100, CP_CUT_PID: 70, CP_CUT_NID: 120 };
+  CP_SINE_PID: 65, CP_SINE_NID: 100, CP_CUT_PID: 70, CP_CUT_NID: 120, CP_SIDE_FRAC: 50 };
 
 function compairPair(a, b, from, to) {           // 1-based inclusive columns, like seqkit subseq -r
   let nid = 0, l1 = 0, l2 = 0;
@@ -671,15 +671,21 @@ function compair(seqs, T = COMPAIR_DEFAULTS) {
   if (cutRF <= T.CP_FLANK_LEN) return { status: 'shortRF', reason: `trimmed right flank ${cutRF} ≤ ${T.CP_FLANK_LEN}`, ...m };
   const cut = compairPair(s1.slice(RF), s2.slice(RF), 1, cutRF);
   m.FRcut = cut.pid; m.FRcp = cut.nid;
-  if (cutRF > T.CP_FLANK_LEN && m.FRcut > T.CP_CUT_PID && m.FRcp > T.CP_CUT_NID)
-    return { status: m.SO > m.ST ? 'PM' : 'MP', reason: 'SINE in one genome, flanks good', ...m };
+  if (cutRF > T.CP_FLANK_LEN && m.FRcut > T.CP_CUT_PID && m.FRcp > T.CP_CUT_NID) {
+    // which locus carries the insertion: residues in the SINE columns (not SO/ST); both or neither -> tiePM
+    const res = x => { let n = 0; for (let i = LF; i < RF; i++) if (x[i] !== undefined && x[i] !== '-' && x[i] !== '.' && x[i] !== '~') n++; return n; };
+    m.R1 = res(s1); m.R2 = res(s2); const RR = res(cons), F = T.CP_SIDE_FRAC ?? 50;
+    const p1 = m.R1 * 100 >= F * RR, p2 = m.R2 * 100 >= F * RR;
+    if (p1 !== p2) return { status: p1 ? 'PM' : 'MP', reason: 'SINE in one genome, flanks good', ...m };
+    return { status: 'tiePM', reason: `insertion in ${p1 ? 'both loci' : 'neither locus'}: residues in the SINE columns ${m.R1} and ${m.R2} of ${RR}`, ...m };
+  }
   return { status: 'badRF', reason: m.FRcut <= T.CP_CUT_PID ? `trimmed right flank identity ${m.FRcut}% ≤ ${T.CP_CUT_PID}%`
                                                            : `trimmed right flank identical nt ${m.FRcp} ≤ ${T.CP_CUT_NID}`, ...m };
 }
 // ── end ComPair port ─────────────────────────────────────────────────────────
 
 const ACCEPTED = ['PM', 'MP', 'SINE'];
-const REJECTED = ['badLF', 'badRF', 'shortRF', 'lfSINE', 'rfSINE'];
+const REJECTED = ['badLF', 'badRF', 'shortRF', 'lfSINE', 'rfSINE', 'tiePM'];
 const STATUS_TYPES = ACCEPTED.concat(REJECTED);
 const groupOf = t => ACCEPTED.includes(t) ? t : 'REJ';
 const liveOf = f => f.live || f.type;              // status under the current thresholds
@@ -899,7 +905,8 @@ const THR_LABELS = {
   CP_FLANK_LEN: 'min flank length (columns)', CP_FLANK_NID: 'min identical nt, left flank',
   CP_FLANK_PID: 'min % identity, flanks', CP_SINE_PID: 'SINE in both: min % identity of SINEs',
   CP_SINE_NID: 'SINE in both: min identical nt', CP_CUT_PID: 'SINE in one: min % identity, trimmed right flank',
-  CP_CUT_NID: 'SINE in one: min identical nt, trimmed right flank' };
+  CP_CUT_NID: 'SINE in one: min identical nt, trimmed right flank',
+  CP_SIDE_FRAC: 'SINE in one: min % of reference residues in the SINE columns for the carrying locus' };
 let thresholds = { ...COMPAIR_DEFAULTS };
 try { Object.assign(thresholds, JSON.parse(localStorage.getItem('sineThresholds') || '{}')); } catch (e) {}
 
