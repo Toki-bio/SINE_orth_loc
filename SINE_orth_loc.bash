@@ -782,21 +782,33 @@ nest_scan() {  # $1: species, $2: genome
 # nest_<sp>.caution.bed lists copies whose flank-based calls need caution (sine_registry.py --caution).
 if [[ "$NEST" == 1 ]]; then
     if command -v nhmmer > /dev/null; then
+        # every step must succeed before the orth table is changed; otherwise it stays without nested rows, the
+        # run goes on (summary, by_reference) and ends with exit status 1
+        nest_ok=1; rm -f nested_"$sp1"-in-"$sp2".tsv nested_"$sp2"-in-"$sp1".tsv orth.tmp orth.tmp.superseded
         for sp in "$sp1" "$sp2"; do
             g=$1; [[ "$sp" == "$sp2" ]] && g=$2
-            nest_scan "$sp" "$g"
+            nest_scan "$sp" "$g" || nest_ok=0
         done
         idx=""; [[ "$MAPPER" == minimap2 ]] && idx=.mmi
-        "$PYTHON" "$NEST_PY" orth --a "$sp1=$1" --b "$sp2=$2" --scan nest_"$sp1" -o nested_"$sp1"-in-"$sp2".tsv \
+        (( nest_ok )) && "$PYTHON" "$NEST_PY" orth --a "$sp1=$1" --b "$sp2=$2" --scan nest_"$sp1" -o nested_"$sp1"-in-"$sp2".tsv \
             --sine-length "$SINElength" --flank $FLANK --threads "$THREADS" \
-            --mapper "$MAPPER" --mapper-opts "$MM2_OPTS" --index "$2$idx"
-        "$PYTHON" "$NEST_PY" orth --a "$sp2=$2" --b "$sp1=$1" --scan nest_"$sp2" -o nested_"$sp2"-in-"$sp1".tsv \
+            --mapper "$MAPPER" --mapper-opts "$MM2_OPTS" --index "$2$idx" || nest_ok=0
+        (( nest_ok )) && "$PYTHON" "$NEST_PY" orth --a "$sp2=$2" --b "$sp1=$1" --scan nest_"$sp2" -o nested_"$sp2"-in-"$sp1".tsv \
             --sine-length "$SINElength" --flank $FLANK --threads "$THREADS" \
-            --mapper "$MAPPER" --mapper-opts "$MM2_OPTS" --index "$1$idx"
-        "$PYTHON" "$NEST_PY" supersede orth_"$sp1"-"$sp2".tsv --scan "$sp1=nest_$sp1" "$sp2=nest_$sp2" \
-            --nested nested_"$sp1"-in-"$sp2".tsv nested_"$sp2"-in-"$sp1".tsv --flank $FLANK -o orth.tmp \
-            && mv orth.tmp orth_"$sp1"-"$sp2".tsv && mv orth.tmp.superseded orth_"$sp1"-"$sp2".superseded.tsv
-        tail -n +2 -q nested_"$sp1"-in-"$sp2".tsv nested_"$sp2"-in-"$sp1".tsv >> orth_"$sp1"-"$sp2".tsv
+            --mapper "$MAPPER" --mapper-opts "$MM2_OPTS" --index "$1$idx" || nest_ok=0
+        (( nest_ok )) && [ -s nested_"$sp1"-in-"$sp2".tsv ] && [ -s nested_"$sp2"-in-"$sp1".tsv ] &&
+            "$PYTHON" "$NEST_PY" supersede orth_"$sp1"-"$sp2".tsv --scan "$sp1=nest_$sp1" "$sp2=nest_$sp2" \
+            --nested nested_"$sp1"-in-"$sp2".tsv nested_"$sp2"-in-"$sp1".tsv --flank $FLANK -o orth.tmp &&
+            [ -s orth.tmp ] && [ -f orth.tmp.superseded ] || nest_ok=0
+        if (( nest_ok )); then
+            mv orth.tmp.superseded orth_"$sp1"-"$sp2".superseded.tsv
+            tail -n +2 -q nested_"$sp1"-in-"$sp2".tsv nested_"$sp2"-in-"$sp1".tsv >> orth.tmp &&
+                mv orth.tmp orth_"$sp1"-"$sp2".tsv
+        else
+            rm -f orth.tmp orth.tmp.superseded
+            echo "nested-locus analysis failed: orth_$sp1-$sp2.tsv has no nested (N) rows; exit status will be 1" >&2
+            NEST_FAILED=1
+        fi
     else
         echo "nhmmer (HMMER) not found: skipping the nested/close/satellite analysis (NEST=0 to silence)"
     fi
@@ -807,3 +819,6 @@ fi
     --copies "$sp1=$sp1-$SINEname.bed" "$sp2=$sp2-$SINEname.bed"
 # the SINE/PM/MP bundles split per reference, for viewing one subfamily's alignments: by_reference/<reference>/
 "$PYTHON" "$(dirname "$(readlink -f "$0")")/orth_split.py" orth_"$sp1"-"$sp2".tsv
+rc=$?
+[[ "$NEST_FAILED" == 1 ]] && exit 1
+exit $rc
