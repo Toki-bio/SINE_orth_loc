@@ -38,15 +38,22 @@ case $cmd in
         [[ $# -lt 2 ]] && usage
         dir=$1; shift
         mkdir -p "$dir" || exit 1
+        # names already written by this call (a name met again, in the same or a later bundle, e.g. a run's bundle
+        # and its by_reference copy, or C<n>R ids of two runs, is written as <name>~2, <name>~3, ... not over it)
+        seen=$(mktemp) || exit 1
         for b in "$@"; do
             # regex passed via the environment: awk -v would interpret its backslashes
-            zcat -f "$b" | RE="$regex" awk -v d="$dir" -v src="$b" 'BEGIN {re=ENVIRON["RE"]}
+            zcat -f "$b" | RE="$regex" SEEN="$seen" awk -v d="$dir" -v src="$b" 'BEGIN {re=ENVIRON["RE"]; S=ENVIRON["SEEN"]
+                    while ((getline l < S) > 0) seen[l]++; close(S)}
                 /^##FILE / {if (o) close(o); n=substr($0,8); o=""
                             if (n ~ /\// || n == "" || (re != "" && n !~ re)) next
-                            o=d"/"n; printf "" > o; k++; next}
+                            f=n; if (++seen[n] > 1) {f=n "~" seen[n]
+                             print "duplicate name " n " (occurrence " seen[n] ") in " src ": written as " f > "/dev/stderr"}
+                            print n >> S; o=d"/"f; printf "" > o; k++; next}
                 o {print > o}
                 END {print k+0" alignments extracted from "src > "/dev/stderr"}'
         done
+        rm -f "$seen"
         ;;
     pack)
         remove=false
