@@ -290,6 +290,14 @@ def cmd_genotype(args):
                 c = counts[f[0]]
                 for i, v in enumerate(f[1:]):
                     c[i] += int(v)
+    # count files made against another template set (older build, renumbered groups) must not pass as no coverage
+    unknown = set(counts) - set(groups)
+    if unknown and len(unknown) == len(counts):
+        die(f'none of the {len(counts)} groups of the count files is in {args.templates}: '
+            'count files from another template set?')
+    if unknown:
+        print(f'{len(unknown)} groups of the count files are not in {args.templates} (ignored), e.g. '
+              + ', '.join(sorted(unknown)[:3]), file=sys.stderr)
     genotype(args, tpl, groups, counts, s / n if n else 150, args.out)
 
 
