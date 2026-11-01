@@ -68,6 +68,10 @@ OUTPUT FILES:
     - {output}/results/rescue_{name1}-{name2}.tsv      - Two-flank rescue outcome per copy
     - {output}/results/orth_{name1}-{name2}.tsv        - One row per validated locus pair
                                                           (input for sine_registry.py)
+    - {output}/results/orth_{name1}-{name2}.superseded.tsv - Flank rows replaced by nested-locus rows
+    - {output}/results/summary_{name1}-{name2}.tsv     - Per-reference summary (loci, statuses, identities)
+    - {output}/results/refs_{name1}-{name2}.tsv        - Bank mode: reference row used for every cluster
+    - {output}/results/by_reference/                   - SINE/PM/MP bundles split per reference
     - {output}/results/alignments/aln_{name1}-{name2}_{PM,MP,SINE,rejected}.aln.gz
                                                         - Alignment bundles (one per category);
                                                           open in sine_loci_browser.html or use
@@ -77,7 +81,8 @@ NOTES:
     - Input FASTA files can have any extension (.fa, .fasta, .fna, etc.)
     - BED files must be 6-column format with strand information
     - SINE consensus header in FASTA must match the filename (without extension)
-    - Requires: mafft, esl-alipid, seqkit, bedtools, samtools, minimap2 (or bwa with MAPPER=bwa), sam2bed, ComPair.sh
+    - Requires: mafft, esl-alipid, seqkit, bedtools, samtools, minimap2 (or bwa with MAPPER=bwa), sam2bed, ComPair.sh,
+      gawk (GNU awk; mawk is refused), python3 >= 3.7 (PYTHON=...), nhmmer for the nested-locus step (NEST=0 skips it)
 
 EOF
 }
@@ -275,6 +280,11 @@ if [[ ! "$NAME2" =~ ^[a-zA-Z0-9]{3}$ ]]; then
     error_exit "Name2 must be exactly 3 alphanumeric characters. Current: '$NAME2'"
 fi
 
+# both genomes are linked into one work directory under these names: equal names would overwrite genome 1
+if [[ "$NAME1" == "$NAME2" ]]; then
+    error_exit "Name1 and Name2 must differ (both are '$NAME1'); give distinct names with -n1/-n2"
+fi
+
 # Extract SINE name from filename
 SINE_NAME=$(basename "$SINE" | sed 's/\.[^.]*$//')
 
@@ -406,6 +416,10 @@ echo "Organizing results..."
 [[ -f "clusters_${NAME1}-${NAME2}.tsv" ]] && mv "clusters_${NAME1}-${NAME2}.tsv" "$RESULTS_DIR/"
 [[ -f "rescue_${NAME1}-${NAME2}.tsv" ]] && mv "rescue_${NAME1}-${NAME2}.tsv" "$RESULTS_DIR/"
 [[ -f "stat_rescue_${NAME1}-${NAME2}" ]] && mv "stat_rescue_${NAME1}-${NAME2}" "$RESULTS_DIR/"
+[[ -f "orth_${NAME1}-${NAME2}.superseded.tsv" ]] && mv "orth_${NAME1}-${NAME2}.superseded.tsv" "$RESULTS_DIR/"
+[[ -f "summary_${NAME1}-${NAME2}.tsv" ]] && mv "summary_${NAME1}-${NAME2}.tsv" "$RESULTS_DIR/"
+[[ -f "refs_${NAME1}-${NAME2}.tsv" ]] && mv "refs_${NAME1}-${NAME2}.tsv" "$RESULTS_DIR/"
+if [[ -d by_reference ]]; then rm -rf "$RESULTS_DIR/by_reference"; mv by_reference "$RESULTS_DIR/"; fi
 
 # Move alignment bundles
 find . -maxdepth 1 -type f -name "aln_*.aln.gz" -exec mv -t "$ALIGNMENTS_DIR/" {} +
@@ -465,6 +479,10 @@ Output Directory Structure:
     │   ├── orth_${NAME1}-${NAME2}.tsv       (Locus pairs for sine_registry.py)
     │   ├── clusters_${NAME1}-${NAME2}.tsv   (Fate of every cluster)
     │   ├── rescue_${NAME1}-${NAME2}.tsv     (Two-flank rescue, per copy)
+    │   ├── summary_${NAME1}-${NAME2}.tsv    (Per-reference summary)
+    │   ├── refs_${NAME1}-${NAME2}.tsv       (Bank mode: reference per cluster)
+    │   ├── orth_${NAME1}-${NAME2}.superseded.tsv (Rows replaced by nested loci)
+    │   ├── by_reference/                    (Bundles split per reference)
     │   ├── alignments/                      (Alignment bundles, *.aln.gz)
     │   └── summary.txt                      (This file)
     ├── work/                                (Intermediate files)
