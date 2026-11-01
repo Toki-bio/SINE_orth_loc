@@ -5,8 +5,8 @@ one subfamily's SINE, PM or MP alignments open on their own in sine_loci_browser
 Usage: orth_split.py orth_<sp1>-<sp2>.tsv [--bundles aln_<sp1>-<sp2>_SINE.aln.gz ...] [-o DIR] [--min-loci 20]
 
 Writes DIR/<reference>/aln_<sp1>-<sp2>_<status>.aln.gz (status = SINE, PM, MP) and DIR/index.tsv (reference, dir,
-status, alignments). References with fewer than --min-loci rows go together under 'other' (same cut as orth_summary's
-table on the Tal page); reference names are made directory-safe. Default bundles: the three next to the orth table;
+status, alignments). References with fewer than --min-loci rows (default 20) go together under 'other' (a cut made
+here only: summary_<sp1>-<sp2>.tsv of orth_summary.py keeps every reference as its own row); reference names are made directory-safe. Default bundles: the three next to the orth table;
 default DIR: by_reference next to it. Alignments of rows that sine_nest.py supersede moved to
 orth_<sp1>-<sp2>.superseded.tsv (compound loci, NEST=1) are not written and are counted as superseded; any other
 alignment whose name is not in the orth table (none expected) is counted and reported, not written."""
