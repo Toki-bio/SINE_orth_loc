@@ -540,7 +540,7 @@ pick_refs() {
       if (match(h, /^(.*):([0-9]+)-([0-9]+)\(([+-])\)$/, m)) print m[1]"\t"m[2]"\t"m[3]"\t"f"|"h"\t0\t"m[4]}' > win.bed
     bedtools intersect -a win.bed -b "$COPIES" -wa -wb 2> /dev/null |
      awk -F'\t' -v F=$FLANK -v L="$REFDIR/lengths.tsv" -v CT="$REFDIR/containers.tsv" \
-      -v fb="$(sort -k2,2nr "$REFDIR/lengths.tsv" | head -n1 | cut -f1)" '
+      -v fb="$(LC_ALL=C sort -k2,2nr -k1,1 "$REFDIR/lengths.tsv" | head -n1 | cut -f1)" '
       BEGIN {while ((getline l < L) > 0) {split(l, x, "\t"); len[x[1]]=x[2]}
              while ((getline l < CT) > 0) {split(l, x, "\t"); cont[x[1]]=cont[x[1]] " " x[2]}}
       {d=($6=="+") ? $8-($2+F) : ($3-F)-$9; if (d<0) d=-d; if ($6!=$12) d+=1000
