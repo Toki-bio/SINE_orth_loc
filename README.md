@@ -269,6 +269,10 @@ placements are taken best first, and a copy whose site, or whose target site, al
 an accepted pair is reported as `shared_site:<pair>` instead of paired (a duplication carrying the
 SINE in both copies gives one orthologous pair and one `shared_site` copy, not two pairs to one site).
 
+- `copies_<sp1>-<sp2>.tsv` — every annotated copy of both BED files, one row: `close_copies`
+  (within FLANK bp of another copy, not analysed), `no_flank` (less than 100 bp of left flank,
+  e.g. at a contig start), `unmapped` (no left-flank hit), `right_flank_disagrees` (hit removed
+  by the both-flanks test) or `mapped` (its cluster's fate is in `clusters_*.tsv`)
 - `clusters_<sp1>-<sp2>.tsv` — every cluster: class, number of loci, fate (resolved and
   how, rejected by ComPair.sh, unresolved) and the rescue outcome of its copies
 - `rescue_<sp1>-<sp2>.tsv` — per copy: resolved (and the new cluster), ambiguous, no hit

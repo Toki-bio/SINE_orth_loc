@@ -64,6 +64,8 @@ OUTPUT FILES:
     - {output}/results/statbed_{name1}-{name2}.bed     - Coordinates of validated loci
     - {output}/results/statbed_{name2}-{name1}.bed     - Reciprocal coordinates
     - {output}/results/MP_PM_SINE_{name1}-{name2}.txt  - Summary statistics
+    - {output}/results/copies_{name1}-{name2}.tsv      - Every annotated copy: close_copies, no_flank, unmapped,
+                                                          right_flank_disagrees or mapped
     - {output}/results/clusters_{name1}-{name2}.tsv    - Fate of every cluster (double/multi/poly)
     - {output}/results/rescue_{name1}-{name2}.tsv      - Two-flank rescue outcome per copy
     - {output}/results/orth_{name1}-{name2}.tsv        - One row per validated locus pair
@@ -421,6 +423,7 @@ echo "Organizing results..."
 [[ -f "orth_${NAME1}-${NAME2}.superseded.tsv" ]] && mv "orth_${NAME1}-${NAME2}.superseded.tsv" "$RESULTS_DIR/"
 [[ -f "summary_${NAME1}-${NAME2}.tsv" ]] && mv "summary_${NAME1}-${NAME2}.tsv" "$RESULTS_DIR/"
 [[ -f "refs_${NAME1}-${NAME2}.tsv" ]] && mv "refs_${NAME1}-${NAME2}.tsv" "$RESULTS_DIR/"
+[[ -f "copies_${NAME1}-${NAME2}.tsv" ]] && mv "copies_${NAME1}-${NAME2}.tsv" "$RESULTS_DIR/"
 if [[ -d by_reference ]]; then rm -rf "$RESULTS_DIR/by_reference"; mv by_reference "$RESULTS_DIR/"; fi
 # nested-locus scan tables (copied: the scan of a genome is reused from work/ by a rerun while its stamp matches)
 for f in nest_"$NAME1".* nest_"$NAME2".* nested_"$NAME1"-in-"$NAME2".tsv nested_"$NAME2"-in-"$NAME1".tsv; do
@@ -485,6 +488,7 @@ Output Directory Structure:
     │   ├── stat_multi_${NAME1}-${NAME2}     (Detailed stats - multis)
     │   ├── stat_rescue_${NAME1}-${NAME2}    (Detailed stats - rescued pairs)
     │   ├── orth_${NAME1}-${NAME2}.tsv       (Locus pairs for sine_registry.py)
+    │   ├── copies_${NAME1}-${NAME2}.tsv     (Fate of every annotated copy at the flank stage)
     │   ├── clusters_${NAME1}-${NAME2}.tsv   (Fate of every cluster)
     │   ├── rescue_${NAME1}-${NAME2}.tsv     (Two-flank rescue, per copy)
     │   ├── summary_${NAME1}-${NAME2}.tsv    (Per-reference summary)

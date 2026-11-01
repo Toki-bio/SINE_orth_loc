@@ -225,7 +225,7 @@ done
 MINRF=${MINRF:-100}
 both_flanks() {  # $1: left-flank hits BED (filtered in place), $2: right-flank hits BED, $3: right-flank BED of
                  # the source genome (lengths), $4: target genome .fai
-    awk -v M=$((SINElength+100)) -v MINRF=$MINRF 'BEGIN {OFS="\t"}
+    awk -v M=$((SINElength+100)) -v MINRF=$MINRF -v NORF="$1.norf" 'BEGIN {OFS="\t"; printf "" > NORF}
      FILENAME==ARGV[1] {r[$4]=r[$4] " " $1"|"$2"|"$3"|"$6; next}
      FILENAME==ARGV[2] {rl[$4]=$3-$2; next}
      FILENAME==ARGV[3] {len[$1]=$2; next}
@@ -235,10 +235,27 @@ both_flanks() {  # $1: left-flank hits BED (filtered in place), $2: right-flank 
       n=split(r[$4], h, " "); ok=0
       for (i=1; i<=n; i++) {split(h[i], x, "|"); if (x[1]!=$1 || x[4]!=$6) continue
        d=($6=="+") ? x[2]-$3 : $2-x[3]; if (d>=-30 && d<=M) ok=1}
-      if (ok) print; else bad++}
+      if (ok) print; else {bad++; print $4 > NORF}}
      END {print FILENAME ": " bad+0 " left-flank hits without a matching right-flank hit removed; kept untested: " \
           short+0 " RF=short, " edge+0 " RF=edge" > "/dev/stderr"}' "$2" "$3" "$4" "$1" > "$1.tmp" &&
      mv "$1.tmp" "$1"
+}
+
+# fate of every annotated copy of one species at the flank stage, one row each (species, copy, label, status):
+# close_copies (within FLANK bp of another copy: not analysed), no_flank (left flank shorter than the 100 bases a
+# flank needs to be mapped: copy at a contig start, or end on -), unmapped (no left-flank hit), right_flank_disagrees
+# (hit removed by both_flanks), mapped (hit kept; what became of its cluster: clusters_<sp1>-<sp2>.tsv)
+copy_fates() {  # $1: species, $2: its genome .fai, $3: its left-flank hits BED (final), $4: _uniq.bed, $5: _clusters.bed
+    local norf="$3.norf"; [ -f "$norf" ] || norf=/dev/null
+    awk -v F=$FLANK -v sp="$1" 'BEGIN {OFS="\t"}
+     FILENAME==ARGV[1] {len[$1]=$2; next}
+     FILENAME==ARGV[2] {hit[$4]=1; next}
+     FILENAME==ARGV[3] {norf[$1]=1; next}
+     FILENAME==ARGV[4] {print sp, $1":"$2"-"$3"("$6")", $4, "close_copies"; next}
+     {if ($6=="+") {ls=($2>F)?$2-F:0; le=$2} else {ls=$3; le=($3+F<len[$1])?$3+F:len[$1]}
+      n=$1":"ls"-"le"("$6")"
+      st=(le-ls<100) ? "no_flank" : (n in hit) ? "mapped" : (n in norf) ? "right_flank_disagrees" : "unmapped"
+      print sp, $1":"$2"-"$3"("$6")", $4, st}' "$2" "$3" "$norf" "$5" "$4"
 }
 
 # ADAPT: flanks still unresolved (no hit, or best MAPQ < ADAPT_MAPQ) are cut again at each length L of ADAPT
@@ -312,6 +329,14 @@ if [[ "$BOTHFLANKS" == 1 ]]; then
 fi
 if [[ -n "$sfx" ]]; then cp "$sp2"_flanks-$sp1$sfx.bed "$sp2"_flanks-$sp1.bed; cp "$sp1"_flanks-$sp2$sfx.bed "$sp1"_flanks-$sp2.bed; fi
 echo mapping complete
+# every annotated copy, one row: copies_<sp1>-<sp2>.tsv (copies that are not analysed or whose flank maps nowhere
+# are listed with their status, not dropped)
+[[ "$BOTHFLANKS" == 1 ]] || rm -f "$sp1"_flanks-$sp2$sfx.bed.norf "$sp2"_flanks-$sp1$sfx.bed.norf
+{ printf 'species\tcopy\tlabel\tstatus\n'
+  copy_fates $sp1 $1.fai "$sp1"_flanks-$sp2$sfx.bed $sp1-"$SINEname"_uniq.bed $sp1-"$SINEname"_clusters.bed
+  copy_fates $sp2 $2.fai "$sp2"_flanks-$sp1$sfx.bed $sp2-"$SINEname"_uniq.bed $sp2-"$SINEname"_clusters.bed
+} > copies_"$sp1"-"$sp2".tsv
+echo "copies_$sp1-$sp2.tsv: $(tail -n +2 copies_"$sp1"-"$sp2".tsv | cut -f1,4 | sort | uniq -c | awk '{printf "%s%s %s %s", (NR>1?", ":""), $2, $3, $1}')"
 
 slop=$((SINElength+FLANK))
 
