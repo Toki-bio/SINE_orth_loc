@@ -202,7 +202,11 @@ def insertion_anchor(chrom, start, end, strand, slop):
     """Position of the flank/SINE junction on the 5' side of the SINE.
 
     Locus windows are the mapped left flank extended 3' by slop (SINE length + 300),
-    so the junction sits slop bp inside the 3' end of the window."""
+    so the junction sits slop bp inside the 3' end of the window. A window clamped at a contig end (bedtools slop
+    stops there) is shorter: when less than 100 bp (the shortest mapped flank) would be left for the flank, the
+    junction is taken FLANK bp from the flank side instead (the flank side is never clamped)."""
+    if end - start - slop < 100:
+        return min(start + FLANK, end) if strand == '+' else max(end - FLANK, start)
     return end - slop if strand == '+' else start + slop
 
 
