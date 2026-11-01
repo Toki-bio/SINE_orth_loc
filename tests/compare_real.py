@@ -56,12 +56,14 @@ for q, t in ((A, B), (B, A)):
         m.setdefault(cid, []).append((f[0], int(f[1])))
     lift[q] = m
 
-def rows_of(run):
+def rows_of(run, label):
     """rows as (status, A side, B side, alignment); a side = (chrom, junction, sine). The junction is the anchor
     column, unless it lies > 50 bp from the window start + FLANK (+) or end - FLANK (-) (FLANK = the run's most
     common anchor offset): about 5 % of anchors lie inside the flank by an amount that changes with FLANK, and then
     the window position is used."""
-    f = glob.glob(os.path.join(run, f'orth_{A}-{B}.tsv'))[0]
+    f = os.path.join(run, f'orth_{A}-{B}.tsv')
+    if not os.path.isfile(f):
+        sys.exit(f'compare_real.py: run {run} has no orth_{A}-{B}.tsv (unfinished run, or --pair in the other order?)')
     rows = [r for r in csv.DictReader(open(f), delimiter='\t')
             if r['cluster'].startswith('C') and r['status'] in ('SINE', 'PM', 'MP') and r['anchor1'] and r['anchor2']]
     # reference row of each cluster (subfamily or span): orth column, or refs_<A>-<B>.tsv of runs made before it
@@ -73,8 +75,11 @@ def rows_of(run):
     for r in rows:
         m = LOC.match(r['locus1'])
         off[int(r['anchor1']) - int(m.group(2)) if m.group(4) == '+' else int(m.group(3)) - int(r['anchor1'])] += 1
+    if not off:
+        print(f'{label}: no C<n>R SINE/PM/MP rows with anchors', file=sys.stderr)
+        return []
     F = off.most_common(1)[0][0]
-    print(f'{os.path.basename(os.path.normpath(run))}: FLANK {F}', file=sys.stderr)
+    print(f'{label}: FLANK {F}', file=sys.stderr)
     out = []
     for r in rows:
         side = {}
@@ -99,7 +104,17 @@ def check(sa, sb):
     if 'disagree' in res: return 'disagree'
     return 'agree' if 'agree' in res else 'untested'
 
-runs = {os.path.basename(os.path.normpath(r)): rows_of(r) for r in a.runs}
+# run labels: the directory name, or, when two runs share it (mm2/F300 bwa/F300), the path below their common
+# parent with '/' -> '_'; run_dir maps a label back to its directory
+paths = [os.path.normpath(r) for r in a.runs]
+labels = [os.path.basename(p) for p in paths]
+if len(set(labels)) < len(labels):
+    base = os.path.commonpath([os.path.abspath(p) for p in paths]) if len(paths) > 1 else ''
+    labels = [os.path.relpath(os.path.abspath(p), base).replace(os.sep, '_') for p in paths]
+if len(set(labels)) < len(labels):
+    sys.exit('compare_real.py: the same run directory is given twice')
+run_dir = dict(zip(labels, a.runs))
+runs = {n: rows_of(run_dir[n], n) for n in labels}
 print('run\trows\tSINE\tPM\tMP\tagree\tdisagree\tuntested')
 for n, rows in runs.items():
     st = collections.Counter(r[0] for r in rows); ch = collections.Counter(check(r[1], r[2]) for r in rows)
@@ -155,8 +170,8 @@ if a.out:
     # every alignment header of every run: window on the A genome -> (alignment name, bundle type)
     HDR = re.compile(r'^>(.*):(\d+)-(\d+)\([+-]\)')
     windows = {}
-    for run in a.runs:
-        n = os.path.basename(os.path.normpath(run)); d = collections.defaultdict(list)
+    for n, run in run_dir.items():
+        d = collections.defaultdict(list)
         for b in glob.glob(os.path.join(run, f'aln_{A}-{B}_*.aln.gz')):
             t = b.rsplit('_', 1)[1].split('.')[0]; name = None
             for l in gzip.open(b, 'rt'):
@@ -193,7 +208,7 @@ if a.out:
             refc = ','.join(sorted({r[4] for r in L['rows'].values() if r[4]}))
             fo.write('\t'.join([f'L{k}', ','.join(c), f"{L['a'][0]}:{L['a'][1]}", chk, refc] + cells) + '\n')
     for (x, n), nms in sorted(want.items()):
-        run = next(r for r in a.runs if os.path.basename(os.path.normpath(r)) == n)
+        run = run_dir[n]
         d = os.path.join(a.out, x, n); os.makedirs(d, exist_ok=True); got = 0
         for b in glob.glob(os.path.join(run, f'aln_{A}-{B}_*.aln.gz')):
             o = gzip.open(os.path.join(d, os.path.basename(b)), 'wt'); o.write('##SINE_orth_loc bundle v1\n'); p = False
