@@ -528,7 +528,7 @@ collect_coords() {
 
 # append every alignment left in the current batch directory to the bundles
 bundle_batch() {
-    find . -maxdepth 1 -type f ! -name "*.fai" ! -name "*.stats" ! -name "*.off" -print0 |
+    find . -maxdepth 1 -type f ! -name "*.fai" ! -name "*.stats" ! -name "*.off" -print0 | LC_ALL=C sort -z |
      xargs -0 -r awk -v b="$BUNDLE" 'FNR==1 {n=FILENAME; sub(/^\.\//,"",n); t=n; sub(/.*\./,"",t)
       if (t!="PM" && t!="MP" && t!="SINE") t="rejected"; out=b"_"t".aln"; print "##FILE " n >> out}
       {print >> out}'
