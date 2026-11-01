@@ -11,7 +11,9 @@ Usage:
   $0 get     NAME BUNDLE...             print one alignment (FASTA) to stdout
   $0 extract [-p REGEX] DIR BUNDLE...   write alignments (names matching REGEX) as files into DIR
   $0 pack    [--remove] DIR PREFIX      bundle loose .PM/.MP/.SINE files of an older run in DIR
-                                        into PREFIX_PM.aln.gz, PREFIX_MP.aln.gz, PREFIX_SINE.aln.gz
+                                        into PREFIX_PM.aln.gz, PREFIX_MP.aln.gz, PREFIX_SINE.aln.gz,
+                                        and its rejected ones (*.cl.*.badLF, badRF, shortRF, lfSINE,
+                                        rfSINE, contig_end, contig_end_lf, overlong) into PREFIX_rejected.aln.gz
                                         (--remove deletes the packed files afterwards)
 EOF
     exit 1
@@ -76,10 +78,13 @@ case $cmd in
         if [[ $1 == "--remove" ]]; then remove=true; shift; fi
         [[ $# -ne 2 ]] && usage
         dir=$1; prefix=$2
-        for t in PM MP SINE; do
+        for t in PM MP SINE rejected; do
             out="${prefix}_$t.aln"
             echo "##SINE_orth_loc bundle v1" > "$out" || exit 1
-            find "$dir" -maxdepth 1 -type f -name "*.$t" -print0 | sort -z |
+            names=(-name "*.$t")
+            [[ $t == rejected ]] && names=(-name "*.cl.*.badLF" -o -name "*.cl.*.badRF" -o -name "*.cl.*.shortRF" -o -name "*.cl.*.lfSINE"
+                -o -name "*.cl.*.rfSINE" -o -name "*.cl.*.contig_end" -o -name "*.cl.*.contig_end_lf" -o -name "*.cl.*.overlong")
+            find "$dir" -maxdepth 1 -type f \( "${names[@]}" \) -print0 | sort -z |
              xargs -0 -r awk 'FNR==1 {n=FILENAME; sub(/.*\//,"",n); print "##FILE " n} {print}' >> "$out" || exit 1
             gzip -f "$out" || exit 1
             k=$(zcat "$out.gz" | grep -c '^##FILE ')
