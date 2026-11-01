@@ -72,6 +72,8 @@ OUTPUT FILES:
     - {output}/results/summary_{name1}-{name2}.tsv     - Per-reference summary (loci, statuses, identities)
     - {output}/results/refs_{name1}-{name2}.tsv        - Bank mode: reference row used for every cluster
     - {output}/results/by_reference/                   - SINE/PM/MP bundles split per reference
+    - {output}/results/stat_{doubles,multi,rescue}_{name1}-{name2} - ComPair.sh statistics per alignment
+    - {output}/results/nest/                           - Nested-locus scan tables (sine_nest.py)
     - {output}/results/alignments/aln_{name1}-{name2}_{PM,MP,SINE,rejected}.aln.gz
                                                         - Alignment bundles (one per category);
                                                           open in sine_loci_browser.html or use
@@ -420,6 +422,11 @@ echo "Organizing results..."
 [[ -f "summary_${NAME1}-${NAME2}.tsv" ]] && mv "summary_${NAME1}-${NAME2}.tsv" "$RESULTS_DIR/"
 [[ -f "refs_${NAME1}-${NAME2}.tsv" ]] && mv "refs_${NAME1}-${NAME2}.tsv" "$RESULTS_DIR/"
 if [[ -d by_reference ]]; then rm -rf "$RESULTS_DIR/by_reference"; mv by_reference "$RESULTS_DIR/"; fi
+# nested-locus scan tables (copied: the scan of a genome is reused from work/ by a rerun while its stamp matches)
+for f in nest_"$NAME1".* nest_"$NAME2".* nested_"$NAME1"-in-"$NAME2".tsv nested_"$NAME2"-in-"$NAME1".tsv; do
+    [[ -f "$f" && "$f" != *.stamp ]] || continue
+    mkdir -p "$RESULTS_DIR/nest" && cp "$f" "$RESULTS_DIR/nest/"
+done
 
 # Move alignment bundles
 find . -maxdepth 1 -type f -name "aln_*.aln.gz" -exec mv -t "$ALIGNMENTS_DIR/" {} +
@@ -476,6 +483,7 @@ Output Directory Structure:
     │   ├── MP_PM_SINE_${NAME1}-${NAME2}.txt (Summary statistics)
     │   ├── stat_doubles_${NAME1}-${NAME2}   (Detailed stats - doubles)
     │   ├── stat_multi_${NAME1}-${NAME2}     (Detailed stats - multis)
+    │   ├── stat_rescue_${NAME1}-${NAME2}    (Detailed stats - rescued pairs)
     │   ├── orth_${NAME1}-${NAME2}.tsv       (Locus pairs for sine_registry.py)
     │   ├── clusters_${NAME1}-${NAME2}.tsv   (Fate of every cluster)
     │   ├── rescue_${NAME1}-${NAME2}.tsv     (Two-flank rescue, per copy)
@@ -483,9 +491,11 @@ Output Directory Structure:
     │   ├── refs_${NAME1}-${NAME2}.tsv       (Bank mode: reference per cluster)
     │   ├── orth_${NAME1}-${NAME2}.superseded.tsv (Rows replaced by nested loci)
     │   ├── by_reference/                    (Bundles split per reference)
-    │   ├── alignments/                      (Alignment bundles, *.aln.gz)
+    │   ├── nest/                            (Nested-locus scan: nest_<sp>.*, nested_*-in-*.tsv)
+    │   ├── alignments/                      (Bundles aln_${NAME1}-${NAME2}_{PM,MP,SINE,rejected}.aln.gz)
     │   └── summary.txt                      (This file)
-    ├── work/                                (Intermediate files)
+    ├── work/                                (Intermediate files; without --keep-intermediates
+    │                                         only *.bed, *.bnk, *.fa, *.fai, *.log are kept)
     └── pipeline.log                         (Complete log)
 
 EOF
