@@ -588,7 +588,7 @@ align_multies() {
 
     for i in *.mul.*.MP *.mul.*.PM *.mul.*.SINE; do [ -f "$i" ] || continue; Len=$(awk '{if (NR==2) print length}' $i);
      if [[ $Len -ge 1600 ]]
-         then rm $i
+         then mv $i $i.overlong; echo "$i: alignment $Len columns, kept as $i.overlong (not deleted)" >&2
      fi
     done
 }
