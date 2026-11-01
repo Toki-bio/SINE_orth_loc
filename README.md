@@ -312,6 +312,8 @@ similar — a flank-based pair can join an old host in one genome with a young i
   insert, the target site duplication verified in the sequence — reassembled hosts in
   `nest_<sp>.reassembled.bed`), **split** (one copy annotated as two pieces), **dimer**, **satellite**
   (≥ 3 periodic units sharing their spacers: not independent insertions), **close**, single;
+  nhmmer hits left out because a better hit covers them, or trimmed below 20 nt, are listed in
+  `nest_<sp>.dropped.tsv`;
 - `orth` compares compound loci through the flanks *outside* the whole locus (unique sequence) and
   tests each element by its junctions against its empty-site junction with one TSD removed — the
   host as one element from its outer ends, the insert inside it;

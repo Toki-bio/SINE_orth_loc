@@ -119,8 +119,9 @@ def parse_tbl(tbl):
     return hits
 
 
-def best_nonoverlapping(hits):
-    """keep the best-scoring hit where hits overlap by > 50% of the shorter one"""
+def best_nonoverlapping(hits, dropped=None):
+    """keep the best-scoring hit where hits overlap by > 50% of the shorter one; hits left out are appended to
+    dropped (if given) as (hit, 'overlap') or, when trimming left less than MIN_PIECE, (hit, 'trimmed')"""
     keep = []
     for h in sorted(hits, key=lambda x: -x['score']):
         ok = True
@@ -130,6 +131,8 @@ def best_nonoverlapping(hits):
                 ok = False; break
         if ok:
             keep.append(h)
+        elif dropped is not None:
+            dropped.append((h, 'overlap'))
     keep.sort(key=lambda x: x['s'])
     # partial overlaps: an old host piece aligned by nhmmer often runs into the younger SINE inserted
     # next to it (both are SINE sequence); trim the weaker piece back to the boundary
@@ -146,7 +149,10 @@ def best_nonoverlapping(hits):
             w['s'] += o
             if w['strand'] == '+': w['cf'] += o
             else: w['ct'] -= o
-    return [h for h in keep if h['e'] - h['s'] >= MIN_PIECE and h['ct'] >= h['cf']]
+    out = [h for h in keep if h['e'] - h['s'] >= MIN_PIECE and h['ct'] >= h['cf']]
+    if dropped is not None:
+        dropped += [(h, 'trimmed') for h in keep if not (h['e'] - h['s'] >= MIN_PIECE and h['ct'] >= h['cf'])]
+    return out
 
 
 def host_order(a, b):
@@ -334,13 +340,21 @@ def cmd_scan(args):
     n_cls = collections.Counter(); n_ev = 0
     with open(f'{pre}.elements.tsv', 'w') as el, open(f'{pre}.loci.tsv', 'w') as lo, \
             open(f'{pre}.nest.tsv', 'w') as ne, open(f'{pre}.reassembled.bed', 'w') as rb, \
-            open(f'{pre}.caution.bed', 'w') as cb:
+            open(f'{pre}.caution.bed', 'w') as cb, open(f'{pre}.dropped.tsv', 'w') as dr:
         el.write('locus\telement\tchrom\tstart\tend\tstrand\ttype\tcons_from\tcons_to\tevalue\tscore\trole\tcopy\n')
         lo.write('locus\tchrom\tstart\tend\tclass\telements\tannotated_copies\n')
+        # nhmmer hits left out of a locus (overlap: inside a better hit; trimmed: < MIN_PIECE after trimming)
+        dr.write('locus\tchrom\tstart\tend\tstrand\ttype\tcons_from\tcons_to\tevalue\tscore\treason\n')
+        n_drop = 0
         ne.write('locus\tchrom\thost_type\tinsert_type\thost_identity\tinsert_identity\thost_break\t'
                  'tsd_length\ttsd\tinsert_orientation\thost\tinsert\n')
         for L in loci:
-            pieces = best_nonoverlapping(hits.get(L['id'], []))
+            dropped = []
+            pieces = best_nonoverlapping(hits.get(L['id'], []), dropped)
+            for p, why in dropped:
+                dr.write(f"{L['id']}\t{L['chrom']}\t{L['ws'] + p['s']}\t{L['ws'] + p['e']}\t{p['strand']}\t{p['q']}\t"
+                         f"{p['cf']}\t{p['ct']}\t{p['ev']:.2g}\t{p['score']:.1f}\t{why}\n")
+            n_drop += len(dropped)
             if not pieces:
                 lo.write(f"{L['id']}\t{L['chrom']}\t{L['start']}\t{L['end']}\tno_hit\t0\t{len(L['copies'])}\n")
                 n_cls['no_hit'] += 1
@@ -388,7 +402,8 @@ def cmd_scan(args):
                     s, e = gpos(p)
                     cb.write(f"{L['chrom']}\t{s}\t{e}\t{c}\t{roles[i]}\t{p['strand']}\n")
     print(f'{len(loci)} loci: ' + ', '.join(f'{k} {v}' for k, v in n_cls.most_common()) +
-          f'; {n_ev} nesting events -> {pre}.nest.tsv', file=sys.stderr)
+          f'; {n_ev} nesting events -> {pre}.nest.tsv; {n_drop} overlapping/trimmed hits -> {pre}.dropped.tsv',
+          file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------------------------- orth
