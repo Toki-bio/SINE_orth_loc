@@ -19,24 +19,40 @@ EOF
 
 [[ $# -lt 2 ]] && usage
 cmd=$1; shift
+set -o pipefail
+# every bundle must be a readable file (a wrong path must not look like an empty bundle)
+check_bundles() { local b; for b in "$@"; do [[ -f "$b" && -r "$b" ]] || { echo "$0: bundle not found or not readable: $b" >&2; exit 1; }; done; }
 
 case $cmd in
     list)
-        for b in "$@"; do zcat -f "$b" | awk '/^##FILE /{print substr($0,8)}'; done
+        check_bundles "$@"
+        for b in "$@"; do zcat -f "$b" | awk '/^##FILE /{print substr($0,8)}' || { echo "$0: cannot read $b" >&2; exit 1; }; done
         ;;
     count)
-        for b in "$@"; do printf '%s\t%s\n' "$(zcat -f "$b" | grep -c '^##FILE ')" "$b"; done
+        check_bundles "$@"
+        for b in "$@"; do
+            k=$(zcat -f "$b" | awk '/^##FILE /{k++} END {print k+0}') || { echo "$0: cannot read $b" >&2; exit 1; }
+            printf '%s\t%s\n' "$k" "$b"
+        done
         ;;
     get)
         name=$1; shift
         [[ $# -lt 1 ]] && usage
-        for b in "$@"; do zcat -f "$b" | awk -v n="$name" '/^##FILE /{p=(substr($0,8)==n); next} p'; done
+        check_bundles "$@"
+        found=0
+        for b in "$@"; do
+            out=$(zcat -f "$b" | awk -v n="$name" '/^##FILE /{p=(substr($0,8)==n); if (p) f=1; next} p; END {exit !f}')
+            rc=$?; [[ -n "$out" ]] && printf '%s\n' "$out"
+            if (( rc == 0 )); then found=1; elif ! zcat -f "$b" > /dev/null; then echo "$0: cannot read $b" >&2; exit 1; fi
+        done
+        (( found )) || { echo "$0: $name not in the given bundles" >&2; exit 1; }
         ;;
     extract)
         regex=""
         if [[ $1 == "-p" ]]; then regex=$2; shift 2; fi
         [[ $# -lt 2 ]] && usage
         dir=$1; shift
+        check_bundles "$@"
         mkdir -p "$dir" || exit 1
         # names already written by this call (a name met again, in the same or a later bundle, e.g. a run's bundle
         # and its by_reference copy, or C<n>R ids of two runs, is written as <name>~2, <name>~3, ... not over it)
