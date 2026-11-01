@@ -51,10 +51,14 @@ rm $bank.gaps
 #report problematic flanks length
 if [[ "$LF" -le "$CP_FLANK_LEN" ]]; then echo "Short FLANK! Trying to fix it"
     part=$(seqkit range -r -1:-1 -w 0 $bank | awk 'NR==2' | perl -pe 's/\p{L}([a-zA-Z]*)/"-" x (length($1)+1)/ei')
+    # only a stray first piece of the reference is blanked: a reference without an internal gap would become an
+    # all-gap row (LF = whole alignment, no SINE region); its left flank is then left short (badLF below)
+    if [[ "$part" =~ [A-Za-z] ]]; then
     awk -v part=$part 'NR<6 {print $0} END {print part}' $bank > $bank.temp
     mv $bank.temp $bank
     LF=$(seqkit range -r -1:-1 -w 0 $bank | awk -F '[^-]+' 'NR!=1 {print length($1)}') # recalculating new left flank coordinate
     echo new left flank $LF
+    else echo "reference row has no gap after its first residue: left flank kept at $LF"; fi
 fi
 # residues of each locus before the SINE start (insertion junction within its window): LS1, LS2. From the alignment
 # (residues left of the reference row's first residue, after the short-flank fix above), unless <cluster>.off (bank
