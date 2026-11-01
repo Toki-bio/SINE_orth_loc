@@ -196,11 +196,13 @@ def count_sam(args, tpl):
                         found.append(('A', 'A'))
             else:
                 j = js[0]
-                if cover(j - W, j + W):
-                    found.append(('A', 'A'))
                 for pos, n in ins:
                     if abs(pos - j) <= T and n >= args.min_ins and cover(j - W, pos) and cover(pos, j + W):
                         found.append(('P0', 'P'))
+                # a read that carries the SINE as an insertion also spans the empty junction (I does not break
+                # the span): it shows P only
+                if not found and cover(j - W, j + W):
+                    found.append(('A', 'A'))
             confident = int(f[4]) >= args.min_mapq
             for jid, al in found:
                 if confident:
